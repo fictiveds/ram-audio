@@ -1,0 +1,10 @@
+build/
+*.wav
+*.pcm
+*.raw
+*.tmp
+__pycache__/
+*.pyc
+*.pyo
+*.swp
+.DS_Store
