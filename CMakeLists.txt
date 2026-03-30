@@ -8,7 +8,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(ram_audio
     src/main.cpp
-    src/algorithms.cpp
+    src/algorithms/core_registry.cpp
+    src/algorithms/classic_algorithms.cpp
+    src/algorithms/texture_algorithms.cpp
+    src/algorithms/advanced_algorithms.cpp
+    src/algorithms/musical_algorithms.cpp
     src/ram_audio_engine.cpp
     src/audio_io.cpp
 )

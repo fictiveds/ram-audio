@@ -90,7 +90,14 @@ sudo ./build/ram_audio --mode stream --duration 60 --sample-rate 44100 | aplay -
 ## Архитектура
 
 - `src/ram_audio_engine.*` - движок чтения памяти процессов, управление голосами, микширование.
-- `src/algorithms.*` - интерфейс алгоритма + реестр + встроенные алгоритмы.
+- `src/algorithms.hpp` - интерфейс алгоритма и публичный реестр.
+- `src/algorithms/` - реализации и регистрация алгоритмов по группам:
+  - `core_registry.cpp` - реализация реестра;
+  - `classic_algorithms.cpp` - базовые алгоритмы;
+  - `texture_algorithms.cpp` - текстурные/шумовые;
+  - `advanced_algorithms.cpp` - продвинутые спектральные/моделирующие;
+  - `musical_algorithms.cpp` - микротональные/полиметрические музыкальные;
+  - `common.hpp` - общие helper-функции для алгоритмов.
 - `src/audio_io.*` - sink-ы вывода: WAV и RAW stream.
 - `src/main.cpp` - CLI, валидация опций, запуск движка.
 
