@@ -1037,6 +1037,84 @@ private:
     std::vector<double> held_;
 };
 
+class GhostBufferBlend final {
+public:
+    GhostBufferBlend(int sampleRate, double depth, double decay, int grainMs)
+        : sampleRate_(std::max(1, sampleRate)),
+          depth_(std::clamp(depth, 0.0, 1.0)),
+          decay_(std::clamp(decay, 0.90, 0.9999)),
+          grainSamples_(std::max(1, (grainMs * std::max(1, sampleRate_)) / 1000)),
+          ring_(),
+          writePos_(0),
+          readPos_(0),
+          grainCounter_(0),
+          grainStep_(1),
+          sceneHold_(0.0),
+          sceneActive_(false) {
+        const std::size_t ringSize = static_cast<std::size_t>(std::max(2048, sampleRate_ * 3));
+        ring_.assign(ringSize, 0.0);
+    }
+
+    void onSceneSwitch(double snapshotSample, std::mt19937& rng) {
+        if (ring_.empty()) {
+            return;
+        }
+
+        std::uniform_int_distribution<std::size_t> posDist(0, ring_.size() - 1);
+        readPos_ = posDist(rng);
+        sceneHold_ = std::clamp(snapshotSample, -32000.0, 32000.0);
+        sceneActive_ = true;
+        grainCounter_ = 0;
+
+        std::uniform_int_distribution<int> stepDist(1, 3);
+        grainStep_ = stepDist(rng);
+    }
+
+    double process(double drySample, std::uint64_t sampleIndex) {
+        if (ring_.empty()) {
+            return drySample;
+        }
+
+        ring_[writePos_] = std::clamp(drySample, -32000.0, 32000.0);
+        writePos_ = (writePos_ + 1) % ring_.size();
+
+        if (depth_ <= 0.0 || !sceneActive_) {
+            return drySample;
+        }
+
+        const double ghostRaw = ring_[readPos_];
+        const double ghost = std::clamp(ghostRaw * decay_ + sceneHold_ * 0.08, -32000.0, 32000.0);
+
+        ++grainCounter_;
+        if (grainCounter_ >= grainSamples_) {
+            grainCounter_ = 0;
+            readPos_ = (readPos_ + static_cast<std::size_t>(grainStep_)) % ring_.size();
+            if (sampleIndex % static_cast<std::uint64_t>(grainSamples_ * 7) == 0ULL) {
+                sceneActive_ = false;
+                sceneHold_ = 0.0;
+            }
+        }
+
+        const double grainPhase = static_cast<double>(grainCounter_) / static_cast<double>(grainSamples_);
+        const double grainEnv = 0.5 - 0.5 * std::cos(2.0 * kPi * grainPhase);
+        const double wet = depth_ * grainEnv;
+        return drySample * (1.0 - wet) + ghost * wet;
+    }
+
+private:
+    int sampleRate_;
+    double depth_;
+    double decay_;
+    int grainSamples_;
+    std::vector<double> ring_;
+    std::size_t writePos_;
+    std::size_t readPos_;
+    int grainCounter_;
+    int grainStep_;
+    double sceneHold_;
+    bool sceneActive_;
+};
+
 }  // namespace
 
 RamAudioEngine::SynthVoice::SynthVoice(std::unique_ptr<IRamAlgorithm> algorithm,
@@ -1408,6 +1486,10 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                                config_.modulationMatrixDepth,
                                config_.modulationFeedbackLimit,
                                config_.modulationWavefoldDepth);
+    GhostBufferBlend ghostBlend(config_.sampleRate,
+                                config_.ghostDepth,
+                                config_.ghostDecay,
+                                config_.ghostGrainMs);
 
     const int crossfadeSamples = std::max(
         0,
@@ -1476,6 +1558,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         if (decision.switchMemorySource) {
             if (hasSwitchCandidate) {
                 const double prevEntropy = memoryEntropy;
+                ghostBlend.onSceneSwitch(smoothedSample, rng_);
 
                 if (crossfadeSamples > 0) {
                     const std::size_t tailSize = static_cast<std::size_t>(crossfadeSamples);
@@ -1587,6 +1670,8 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
             smoothedSample = smoothedSample * fadeIn + crossfadeTail[crossfadeTailPos] * fadeOut;
             ++crossfadeTailPos;
         }
+
+        smoothedSample = ghostBlend.process(smoothedSample, i);
 
         telemetry.pushSample(smoothedSample, i);
         sceneState.telemetry = telemetry.metrics();

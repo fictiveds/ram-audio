@@ -183,7 +183,7 @@
   - Реализован `min_scene_time` и `crossfade_ms`.
   - Вероятности переключений учитывают текущий energy/novelty профиль.
 
-#### [ ] T4.4 Implement `ghost_buffer_blend`
+#### [x] T4.4 Implement `ghost_buffer_blend`
 - Description: "призрак" предыдущей сцены в кольцевом буфере, гранулярно подмешиваемый в новую.
 - DoD:
   - Используется ограниченный ring buffer с контролируемым memory footprint.

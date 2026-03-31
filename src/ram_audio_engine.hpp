@@ -91,6 +91,9 @@ struct EngineConfig {
     double modulationMatrixDepth = 0.22;
     double modulationFeedbackLimit = 0.55;
     double modulationWavefoldDepth = 0.18;
+    double ghostDepth = 0.20;
+    double ghostDecay = 0.996;
+    int ghostGrainMs = 60;
     double entropyDeltaUp = 0.015;
     double entropyDeltaDown = 0.015;
     double entropyHysteresis = 0.004;

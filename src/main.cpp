@@ -39,6 +39,9 @@ struct CliOptions {
     double modulationMatrixDepth = 0.22;
     double modulationFeedbackLimit = 0.55;
     double modulationWavefoldDepth = 0.18;
+    double ghostDepth = 0.20;
+    double ghostDecay = 0.996;
+    int ghostGrainMs = 60;
     std::string switchMode = "timer";
     std::string mixMode = "smoothed";
     double entropyDeltaUp = 0.015;
@@ -204,6 +207,9 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --mod-matrix-depth <v>     глубина modulation matrix [0..1]\n"
         << "  --mod-feedback-limit <v>   ограничение feedback в modulation matrix [0..0.95]\n"
         << "  --mod-wavefold <v>         глубина wavefold в modulation matrix [0..1]\n"
+        << "  --ghost-depth <v>          глубина ghost-buffer blend [0..1]\n"
+        << "  --ghost-decay <v>          decay ghost-buffer blend [0.90..0.9999]\n"
+        << "  --ghost-grain-ms <n>       размер grain ghost-buffer, мс\n"
         << "  --switch-mode <mode>       режим переключения сцен (timer|entropy-triggered)\n"
         << "  --mix-mode <mode>          режим микширования (smoothed)\n"
         << "  --entropy-delta-up <v>     порог роста энтропии RAM для switch (по умолчанию 0.015)\n"
@@ -379,6 +385,21 @@ bool parseCli(int argc,
         } else if (isFlag(arg, "--mod-wavefold")) {
             if (!requireValue(arg, value) || !parseDouble(value, options.modulationWavefoldDepth)) {
                 error = "Некорректное значение --mod-wavefold";
+                return false;
+            }
+        } else if (isFlag(arg, "--ghost-depth")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.ghostDepth)) {
+                error = "Некорректное значение --ghost-depth";
+                return false;
+            }
+        } else if (isFlag(arg, "--ghost-decay")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.ghostDecay)) {
+                error = "Некорректное значение --ghost-decay";
+                return false;
+            }
+        } else if (isFlag(arg, "--ghost-grain-ms")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.ghostGrainMs)) {
+                error = "Некорректное значение --ghost-grain-ms";
                 return false;
             }
         } else if (isFlag(arg, "--switch-mode")) {
@@ -653,6 +674,21 @@ bool parseCli(int argc,
         return false;
     }
 
+    if (options.ghostDepth < 0.0 || options.ghostDepth > 1.0) {
+        error = "--ghost-depth должен быть в диапазоне [0, 1]";
+        return false;
+    }
+
+    if (options.ghostDecay < 0.90 || options.ghostDecay > 0.9999) {
+        error = "--ghost-decay должен быть в диапазоне [0.90, 0.9999]";
+        return false;
+    }
+
+    if (options.ghostGrainMs < 5 || options.ghostGrainMs > 4000) {
+        error = "--ghost-grain-ms должен быть в диапазоне [5, 4000]";
+        return false;
+    }
+
     if (options.switchMode != "timer" && options.switchMode != "entropy-triggered") {
         error = "Некорректный --switch-mode: " + options.switchMode +
                 " (поддерживается: timer|entropy-triggered)";
@@ -818,6 +854,9 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.modulationMatrixDepth = options.modulationMatrixDepth;
     config.modulationFeedbackLimit = options.modulationFeedbackLimit;
     config.modulationWavefoldDepth = options.modulationWavefoldDepth;
+    config.ghostDepth = options.ghostDepth;
+    config.ghostDecay = options.ghostDecay;
+    config.ghostGrainMs = options.ghostGrainMs;
     config.switchMode = options.switchMode;
     config.mixMode = options.mixMode;
     config.entropyDeltaUp = options.entropyDeltaUp;
