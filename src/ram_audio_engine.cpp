@@ -885,14 +885,15 @@ public:
           wavefoldDepth_(std::clamp(wavefoldDepth, 0.0, 1.0)),
           feedbackState_(0.0) {}
 
-    std::vector<double> process(const std::vector<VoiceDescriptor>& voices,
-                                const std::vector<double>& in) {
+    const std::vector<double>& process(const std::vector<VoiceDescriptor>& voices,
+                                       const std::vector<double>& in) {
         if (!enabled_ || in.empty()) {
-            return in;
+            scratch_ = in;
+            return scratch_;
         }
 
         const std::size_t n = in.size();
-        std::vector<double> out(n, 0.0);
+        scratch_.assign(n, 0.0);
         double inEnergy = 0.0;
         for (double s : in) {
             if (std::isfinite(s)) {
@@ -903,7 +904,7 @@ public:
         for (std::size_t i = 0; i < n; ++i) {
             const double carrier = in[i];
             if (!std::isfinite(carrier)) {
-                out[i] = 0.0;
+                scratch_[i] = 0.0;
                 continue;
             }
 
@@ -921,11 +922,11 @@ public:
             const double ring = carrier + (depth_ * 0.6) * (carrier * std::tanh(mod));
             const double mixed = 0.55 * am + 0.45 * ring;
             const double shaped = wavefold(mixed, wavefoldDepth_ * (0.2 + depth_ * 0.8));
-            out[i] = carrier * (1.0 - depth_ * 0.45) + shaped * (depth_ * 0.45);
+            scratch_[i] = carrier * (1.0 - depth_ * 0.45) + shaped * (depth_ * 0.45);
         }
 
         double outEnergy = 0.0;
-        for (double v : out) {
+        for (double v : scratch_) {
             if (std::isfinite(v)) {
                 outEnergy += v * v;
             }
@@ -933,13 +934,13 @@ public:
 
         if (inEnergy > 1e-9 && outEnergy > 1e-9) {
             const double makeUp = std::clamp(std::sqrt(inEnergy / outEnergy), 0.35, 8.0);
-            for (double& v : out) {
+            for (double& v : scratch_) {
                 v *= makeUp;
             }
         }
 
         double sum = 0.0;
-        for (double v : out) {
+        for (double v : scratch_) {
             sum += v;
         }
         const double mono = sum / static_cast<double>(n);
@@ -947,11 +948,11 @@ public:
         feedbackState_ = std::clamp((feedbackState_ * 0.97) + mono * (depth_ * 0.03),
                                     -feedbackLimit_, feedbackLimit_);
 
-        for (double& v : out) {
+        for (double& v : scratch_) {
             v = std::clamp(v + feedbackState_ * 0.3, -32000.0, 32000.0);
         }
 
-        return out;
+        return scratch_;
     }
 
     bool enabled() const {
@@ -999,6 +1000,7 @@ private:
     double feedbackLimit_;
     double wavefoldDepth_;
     double feedbackState_;
+    std::vector<double> scratch_;
 };
 
 }  // namespace
@@ -1536,7 +1538,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
             createVoice(false);
         }
 
-        std::vector<double> modulatedSamples = modMatrix.process(voiceDescriptors, voiceSamples);
+        const std::vector<double>& modulatedSamples = modMatrix.process(voiceDescriptors, voiceSamples);
         smoothedSample = mixPolicy_->mix(sceneState, voiceDescriptors, modulatedSamples, smoothedSample);
         smoothedSample = bandMixer.process(sceneState, voiceDescriptors, modulatedSamples);
         if (!std::isfinite(smoothedSample)) {
@@ -1559,7 +1561,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
             if (config_.verbose && (i % static_cast<std::uint64_t>(config_.sampleRate) == 0ULL)) {
                 std::cerr << "\n[!] Mod-matrix fallback: low RMS detected, injecting dry recovery" << std::endl;
             }
-            const double dryRecovery = bandMixer.process(sceneState, voiceDescriptors, voiceSamples);
+            const double dryRecovery = mixPolicy_->mix(sceneState, voiceDescriptors, voiceSamples, smoothedSample);
             smoothedSample = 0.7 * dryRecovery + 0.3 * smoothedSample;
         }
 
