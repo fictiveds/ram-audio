@@ -50,9 +50,10 @@ if [[ ! -x "${engine_bin}" ]]; then
     exit 1
 fi
 
-echo "[sudo] Требуется пароль для чтения /proc/*/mem" >&2
+echo "[sudo] Сейчас будет запрос пароля (в этом терминале)." >&2
 sudo -k
-sudo -v
+sudo --prompt='[sudo] Пароль для %u: ' -v
+echo "[ok] Пароль принят, запускаю stream -> ffplay" >&2
 
 engine_cmd=(
     sudo
@@ -67,4 +68,4 @@ if [[ -n "${seed_value}" ]]; then
     engine_cmd+=(--seed "${seed_value}")
 fi
 
-"${engine_cmd[@]}" | ffplay -hide_banner -f s16le -ar "${sample_rate}" -ch_layout mono -
+"${engine_cmd[@]}" | ffplay -hide_banner -nostats -loglevel warning -f s16le -ar "${sample_rate}" -ch_layout mono -

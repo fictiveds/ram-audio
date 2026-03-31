@@ -163,6 +163,10 @@ sudo ./build/ram_audio --mode stream --infinite --algorithms chaotic_lorenz_fm,p
 bash scripts/stream_ffplay.sh 60
 ```
 
+Скрипт выводит явные этапы:
+- `[sudo] Сейчас будет запрос пароля...`
+- `[ok] Пароль принят...`
+
 Бесконечный режим:
 
 ```bash
