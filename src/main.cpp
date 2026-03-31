@@ -28,6 +28,8 @@ struct CliOptions {
     int memorySwitchMaxSec = 40;
     int voiceSpawnMinSec = 2;
     int voiceSpawnMaxSec = 8;
+    std::string switchMode = "timer";
+    std::string mixMode = "smoothed";
     unsigned int seed = 0;
     bool verbose = true;
     bool listAlgorithms = false;
@@ -139,6 +141,8 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --buffer-ms <ms>           буфер вывода для stream, 0=без буфера (по умолчанию 500)\n"
         << "  --max-memory-mb <mb>       лимит считанной памяти процесса (по умолчанию 60)\n"
         << "  --algorithms <a,b,c>       список ID алгоритмов для выбора\n"
+        << "  --switch-mode <mode>       режим переключения сцен (timer)\n"
+        << "  --mix-mode <mode>          режим микширования (smoothed)\n"
         << "  --list-algorithms          показать доступные алгоритмы\n"
         << "  --seed <num>               фиксировать seed (0 = случайный)\n"
         << "  --quiet                    отключить лог прогресса\n"
@@ -235,6 +239,16 @@ bool parseCli(int argc,
                 return false;
             }
             options.algorithms = splitCsv(value);
+        } else if (isFlag(arg, "--switch-mode")) {
+            if (!requireValue(arg, value)) {
+                return false;
+            }
+            options.switchMode = value;
+        } else if (isFlag(arg, "--mix-mode")) {
+            if (!requireValue(arg, value)) {
+                return false;
+            }
+            options.mixMode = value;
         } else if (isFlag(arg, "--min-voices")) {
             if (!requireValue(arg, value) || !parseInt(value, options.minVoices)) {
                 error = "Некорректное значение --min-voices";
@@ -307,6 +321,16 @@ bool parseCli(int argc,
         }
     }
 
+    if (options.switchMode != "timer") {
+        error = "Некорректный --switch-mode: " + options.switchMode + " (поддерживается: timer)";
+        return false;
+    }
+
+    if (options.mixMode != "smoothed") {
+        error = "Некорректный --mix-mode: " + options.mixMode + " (поддерживается: smoothed)";
+        return false;
+    }
+
     return true;
 }
 
@@ -322,6 +346,8 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.memorySwitchMaxSec = options.memorySwitchMaxSec;
     config.voiceSpawnMinSec = options.voiceSpawnMinSec;
     config.voiceSpawnMaxSec = options.voiceSpawnMaxSec;
+    config.switchMode = options.switchMode;
+    config.mixMode = options.mixMode;
     config.seed = options.seed;
     config.verbose = options.verbose;
     config.stopFlag = &gStopRequested;
@@ -409,6 +435,8 @@ int main(int argc, char** argv) {
             std::cerr << "Буфер stream: " << options.bufferMs << " ms"
                       << (options.bufferMs == 0 ? " (выключен)" : "") << std::endl;
         }
+        std::cerr << "Switch mode: " << options.switchMode
+                  << ", Mix mode: " << options.mixMode << std::endl;
         if (options.infinite) {
             std::cerr << "Остановка: Ctrl+C" << std::endl;
         }

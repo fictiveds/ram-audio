@@ -6,6 +6,7 @@
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -13,6 +14,52 @@
 enum class OutputMode {
     File,
     Stream
+};
+
+struct VoiceDescriptor {
+    std::string algorithmId;
+    bool anchor = false;
+    double volume = 0.0;
+    int ageSamples = 0;
+    int lifeSamples = 0;
+    double currentValue = 0.0;
+};
+
+struct SceneState {
+    std::uint64_t sampleIndex = 0;
+    std::uint64_t sceneStartSample = 0;
+    int sceneIndex = 0;
+    int activePid = -1;
+    std::string activeProcessName;
+    double macroMod = 0.0;
+};
+
+struct SwitchDecision {
+    bool switchMemorySource = false;
+    bool spawnVoice = false;
+    int targetVoices = 0;
+};
+
+class ISwitchPolicy {
+public:
+    virtual ~ISwitchPolicy() = default;
+
+    virtual SwitchDecision decide(const SceneState& scene,
+                                  std::size_t activeVoices,
+                                  int minVoices,
+                                  int maxVoices,
+                                  std::uint64_t memorySwitchTimer,
+                                  std::uint64_t voiceSpawnTimer) = 0;
+};
+
+class IMixPolicy {
+public:
+    virtual ~IMixPolicy() = default;
+
+    virtual double mix(const SceneState& scene,
+                       const std::vector<VoiceDescriptor>& voices,
+                       const std::vector<double>& voiceSamples,
+                       double previousOutput) = 0;
 };
 
 struct EngineConfig {
@@ -30,6 +77,10 @@ struct EngineConfig {
     bool verbose = true;
     const volatile std::sig_atomic_t* stopFlag = nullptr;
     std::vector<std::string> allowedAlgorithmIds;
+    std::string switchMode = "timer";
+    std::string mixMode = "smoothed";
+    std::shared_ptr<ISwitchPolicy> switchPolicy;
+    std::shared_ptr<IMixPolicy> mixPolicy;
 };
 
 struct RunStats {
@@ -68,6 +119,7 @@ private:
 
         bool isDead() const;
         bool isAnchor() const;
+        VoiceDescriptor descriptor() const;
         double tick(std::uint64_t sampleIndex,
                     const std::vector<std::uint8_t>& memory,
                     double macroMod);
@@ -95,6 +147,8 @@ private:
     EngineConfig config_;
     AlgorithmRegistry registry_;
     std::mt19937 rng_;
+    std::shared_ptr<ISwitchPolicy> switchPolicy_;
+    std::shared_ptr<IMixPolicy> mixPolicy_;
 };
 
 #endif

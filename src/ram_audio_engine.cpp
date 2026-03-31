@@ -11,6 +11,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <sys/types.h>
@@ -92,6 +93,52 @@ bool isAllZero(const std::uint8_t* data, std::size_t size) {
     return true;
 }
 
+class TimerSwitchPolicy final : public ISwitchPolicy {
+public:
+    explicit TimerSwitchPolicy(std::mt19937& rng)
+        : rng_(rng) {}
+
+    SwitchDecision decide(const SceneState& /*scene*/,
+                          std::size_t activeVoices,
+                          int minVoices,
+                          int maxVoices,
+                          std::uint64_t memorySwitchTimer,
+                          std::uint64_t voiceSpawnTimer) override {
+        SwitchDecision decision;
+        decision.switchMemorySource = (memorySwitchTimer == 0);
+
+        if (voiceSpawnTimer == 0) {
+            const int minTarget = std::max(1, minVoices);
+            const int maxTarget = std::max(minTarget, maxVoices);
+            decision.targetVoices = randomIntInclusive(rng_, minTarget, maxTarget);
+            decision.spawnVoice = static_cast<int>(activeVoices) < decision.targetVoices;
+        }
+
+        return decision;
+    }
+
+private:
+    std::mt19937& rng_;
+};
+
+class SmoothedAverageMixPolicy final : public IMixPolicy {
+public:
+    double mix(const SceneState& scene,
+               const std::vector<VoiceDescriptor>& voices,
+               const std::vector<double>& voiceSamples,
+               double previousOutput) override {
+        (void)voices;
+
+        double mixed = 0.0;
+        for (double value : voiceSamples) {
+            mixed += value;
+        }
+
+        const double filterCutoff = 0.03 + scene.macroMod * 0.2;
+        return previousOutput + filterCutoff * (mixed - previousOutput);
+    }
+};
+
 }  // namespace
 
 RamAudioEngine::SynthVoice::SynthVoice(std::unique_ptr<IRamAlgorithm> algorithm,
@@ -124,6 +171,17 @@ bool RamAudioEngine::SynthVoice::isDead() const {
 
 bool RamAudioEngine::SynthVoice::isAnchor() const {
     return anchor_;
+}
+
+VoiceDescriptor RamAudioEngine::SynthVoice::descriptor() const {
+    VoiceDescriptor desc;
+    desc.algorithmId = algorithm_ ? algorithm_->id() : "unknown";
+    desc.anchor = anchor_;
+    desc.volume = volume_;
+    desc.ageSamples = age_;
+    desc.lifeSamples = lifeSamples_;
+    desc.currentValue = currentValue_;
+    return desc;
 }
 
 double RamAudioEngine::SynthVoice::tick(std::uint64_t sampleIndex,
@@ -166,7 +224,16 @@ void RamAudioEngine::SynthVoice::onMemorySizeChanged(std::size_t newMemorySize) 
 RamAudioEngine::RamAudioEngine(EngineConfig config, AlgorithmRegistry registry)
     : config_(std::move(config)),
       registry_(std::move(registry)),
-      rng_(config_.seed != 0 ? config_.seed : std::random_device{}()) {}
+      rng_(config_.seed != 0 ? config_.seed : std::random_device{}()),
+      switchPolicy_(config_.switchPolicy),
+      mixPolicy_(config_.mixPolicy) {
+    if (!switchPolicy_) {
+        switchPolicy_ = std::make_shared<TimerSwitchPolicy>(rng_);
+    }
+    if (!mixPolicy_) {
+        mixPolicy_ = std::make_shared<SmoothedAverageMixPolicy>();
+    }
+}
 
 bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) {
     if (config_.sampleRate <= 1000) {
@@ -265,18 +332,33 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
     }
     createVoice(false);
 
+    auto schedulePidSwitchTimer = [&]() -> std::uint64_t {
+        return static_cast<std::uint64_t>(
+            randomDouble(rng_, static_cast<double>(config_.memorySwitchMinSec),
+                         static_cast<double>(config_.memorySwitchMaxSec)) *
+            static_cast<double>(config_.sampleRate));
+    };
+
+    auto scheduleVoiceSpawnTimer = [&]() -> std::uint64_t {
+        return static_cast<std::uint64_t>(
+            randomDouble(rng_, static_cast<double>(config_.voiceSpawnMinSec),
+                         static_cast<double>(config_.voiceSpawnMaxSec)) *
+            static_cast<double>(config_.sampleRate));
+    };
+
     std::uint64_t nextVoiceTime = static_cast<std::uint64_t>(
         randomDouble(rng_, 1.0, 5.0) * static_cast<double>(config_.sampleRate));
-    std::uint64_t pidTimer = static_cast<std::uint64_t>(
-        randomDouble(rng_, static_cast<double>(config_.memorySwitchMinSec),
-                     static_cast<double>(config_.memorySwitchMaxSec)) *
-        static_cast<double>(config_.sampleRate));
+    std::uint64_t pidTimer = schedulePidSwitchTimer();
 
     double smoothedSample = 0.0;
     double energyEma = 0.0;
     int silenceSamples = 0;
     const double silenceEnergyThreshold = 18000.0;
     const int silenceRecoverySamples = std::max(1, config_.sampleRate / 3);
+
+    SceneState sceneState;
+    sceneState.activePid = snapshot.pid;
+    sceneState.activeProcessName = snapshot.processName;
 
     const std::uint64_t totalSamples = config_.infinite
                                            ? std::numeric_limits<std::uint64_t>::max()
@@ -287,7 +369,22 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         if (config_.stopFlag != nullptr && *config_.stopFlag != 0) {
             break;
         }
-        if (pidTimer == 0) {
+
+        const double macroMod = (lfo(i, 0.05, config_.sampleRate) + 1.0) / 2.0;
+        sceneState.sampleIndex = i;
+        sceneState.macroMod = macroMod;
+        sceneState.activePid = snapshot.pid;
+        sceneState.activeProcessName = snapshot.processName;
+
+        const SwitchDecision decision = switchPolicy_->decide(
+            sceneState,
+            voices.size(),
+            config_.minVoices,
+            config_.maxVoices,
+            pidTimer,
+            nextVoiceTime);
+
+        if (decision.switchMemorySource) {
             std::string switchErr;
             MemorySnapshot newSnapshot = getRandomProcessMemory(switchErr);
             if (!newSnapshot.bytes.empty()) {
@@ -298,6 +395,10 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                 for (auto& voice : voices) {
                     voice.onMemorySizeChanged(snapshot.bytes.size());
                 }
+                sceneState.sceneIndex += 1;
+                sceneState.sceneStartSample = i;
+                sceneState.activePid = snapshot.pid;
+                sceneState.activeProcessName = snapshot.processName;
                 if (config_.verbose) {
                     std::cerr << "\n[+] Смена источника: " << snapshot.processName
                               << " (PID: " << snapshot.pid << "), "
@@ -308,39 +409,39 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
             } else if (config_.verbose && !switchErr.empty()) {
                 std::cerr << "\n[!] Смена процесса пропущена: " << switchErr << std::endl;
             }
-            pidTimer = static_cast<std::uint64_t>(
-                randomDouble(rng_, static_cast<double>(config_.memorySwitchMinSec),
-                             static_cast<double>(config_.memorySwitchMaxSec)) *
-                static_cast<double>(config_.sampleRate));
+            pidTimer = schedulePidSwitchTimer();
         }
         if (pidTimer > 0) {
             --pidTimer;
         }
 
-        if (nextVoiceTime == 0) {
-            const int targetVoices = randomIntInclusive(
-                rng_,
-                std::max(1, config_.minVoices),
-                std::max(std::max(1, config_.minVoices), config_.maxVoices));
+        if (decision.spawnVoice) {
+            const int targetVoices = decision.targetVoices > 0
+                                         ? decision.targetVoices
+                                         : std::max(
+                                               std::max(1, config_.minVoices),
+                                               static_cast<int>(voices.size()) + 1);
             if (static_cast<int>(voices.size()) < targetVoices) {
                 createVoice(false);
             }
-            nextVoiceTime = static_cast<std::uint64_t>(
-                randomDouble(rng_, static_cast<double>(config_.voiceSpawnMinSec),
-                             static_cast<double>(config_.voiceSpawnMaxSec)) *
-                static_cast<double>(config_.sampleRate));
+        }
+        if (nextVoiceTime == 0) {
+            nextVoiceTime = scheduleVoiceSpawnTimer();
         }
         if (nextVoiceTime > 0) {
             --nextVoiceTime;
         }
 
-        const double macroMod = (lfo(i, 0.05, config_.sampleRate) + 1.0) / 2.0;
-
-        double mixedSample = 0.0;
+        std::vector<VoiceDescriptor> voiceDescriptors;
+        std::vector<double> voiceSamples;
         std::vector<SynthVoice> aliveVoices;
+        voiceDescriptors.reserve(voices.size());
+        voiceSamples.reserve(voices.size());
         aliveVoices.reserve(voices.size());
         for (auto& voice : voices) {
-            mixedSample += voice.tick(i, snapshot.bytes, macroMod);
+            const double voiceSample = voice.tick(i, snapshot.bytes, macroMod);
+            voiceDescriptors.push_back(voice.descriptor());
+            voiceSamples.push_back(voiceSample);
             if (!voice.isDead()) {
                 aliveVoices.emplace_back(std::move(voice));
             }
@@ -362,8 +463,10 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
             createVoice(false);
         }
 
-        const double filterCutoff = 0.03 + macroMod * 0.2;
-        smoothedSample += filterCutoff * (mixedSample - smoothedSample);
+        smoothedSample = mixPolicy_->mix(sceneState, voiceDescriptors, voiceSamples, smoothedSample);
+        if (!std::isfinite(smoothedSample)) {
+            smoothedSample = 0.0;
+        }
 
         const double currentEnergy = smoothedSample * smoothedSample;
         energyEma = (energyEma * 0.9992) + (currentEnergy * 0.0008);
