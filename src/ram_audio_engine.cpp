@@ -1226,6 +1226,15 @@ RamAudioEngine::SynthVoice::SynthVoice(std::unique_ptr<IRamAlgorithm> algorithm,
     if (anchor_) {
         volume_ = randomDouble(rng, 0.24, 0.5);
         downsample_ = randomIntInclusive(rng, 1, 8);
+    } else if (algorithm_ && algorithm_->id() == "modal_mesh_exciter") {
+        volume_ = randomDouble(rng, 0.22, 0.55);
+        downsample_ = randomIntInclusive(rng, 6, 24);
+    } else if (algorithm_ && algorithm_->id() == "spectral_freeze_permuter") {
+        volume_ = randomDouble(rng, 0.24, 0.62);
+        downsample_ = randomIntInclusive(rng, 4, 14);
+    } else if (algorithm_ && algorithm_->id() == "fdn_prime_feedback") {
+        volume_ = randomDouble(rng, 0.26, 0.70);
+        downsample_ = randomIntInclusive(rng, 3, 10);
     } else if (algorithm_ && algorithm_->prefersHighResolution()) {
         const int options[] = {1, 1, 3, 10};
         std::uniform_int_distribution<int> dist(0, 3);
@@ -1395,7 +1404,24 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                          id) != config_.allowedAlgorithmIds.end();
     };
 
+    const int hardMaxVoices = std::max(1, config_.maxVoices);
+
+    auto countVoicesByAlgorithm = [&](const std::string& id) -> int {
+        int count = 0;
+        for (const auto& voice : voices) {
+            const VoiceDescriptor d = voice.descriptor();
+            if (d.algorithmId == id) {
+                ++count;
+            }
+        }
+        return count;
+    };
+
     auto createVoice = [&](bool anchor, const std::string& preferredId = std::string()) -> bool {
+        if (!anchor && static_cast<int>(voices.size()) >= hardMaxVoices) {
+            return false;
+        }
+
         std::unique_ptr<IRamAlgorithm> algo;
         std::string selectedId = preferredId;
 
@@ -1442,6 +1468,22 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
 
         if (!algo) {
             return false;
+        }
+
+        if (!anchor) {
+            const std::string algoId = algo->id();
+            int perAlgoCap = hardMaxVoices;
+            if (algoId == "modal_mesh_exciter") {
+                perAlgoCap = std::min(hardMaxVoices, 3);
+            } else if (algoId == "spectral_freeze_permuter") {
+                perAlgoCap = std::min(hardMaxVoices, 2);
+            } else if (algoId == "fdn_prime_feedback") {
+                perAlgoCap = std::min(hardMaxVoices, 3);
+            }
+
+            if (countVoicesByAlgorithm(algoId) >= perAlgoCap) {
+                return false;
+            }
         }
 
         voices.emplace_back(std::move(algo), config_.sampleRate, rng_, anchor);

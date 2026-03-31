@@ -333,7 +333,7 @@ public:
             ptr_ = boundedIndex(ptr_ + static_cast<std::size_t>(17U + memory[idx] + static_cast<int>(p1_ * 11.0)), memorySize_);
         }
 
-        return std::tanh(y * (2.2 + macroMod * 0.8)) * 15000.0 * wet_;
+        return std::tanh(y * (2.8 + macroMod * 1.2)) * 17500.0 * wet_;
     }
 
     void onMemorySizeChanged(std::size_t newMemorySize) override {
@@ -555,7 +555,7 @@ public:
     }
 
     bool prefersHighResolution() const override {
-        return true;
+        return false;
     }
 
     double generate(std::uint64_t sampleIndex,
@@ -571,8 +571,8 @@ public:
             excite(memory, sampleIndex, macroMod);
         }
 
-        const double c2 = std::clamp(c2Base_ + macroMod * 0.12, 0.02, 0.24);
-        const double damp = std::clamp(dampingBase_ + (1.0 - macroMod) * 0.008, 0.0004, 0.02);
+        const double c2 = std::clamp(c2Base_ + macroMod * 0.10, 0.02, 0.19);
+        const double damp = std::clamp(dampingBase_ + (1.0 - macroMod) * 0.010, 0.0010, 0.024);
 
         for (int y = 1; y < (kH - 1); ++y) {
             for (int x = 1; x < (kW - 1); ++x) {
@@ -597,14 +597,14 @@ public:
         next_.fill(0.0);
 
         const int c = (kH / 2) * kW + (kW / 2);
-        const double o = curr_[c] + 0.6 * curr_[c - 1] + 0.45 * curr_[c + 1] + 0.4 * curr_[c - kW] + 0.35 * curr_[c + kW];
+        const double o = curr_[c] + 0.45 * curr_[c - 1] + 0.38 * curr_[c + 1] + 0.32 * curr_[c - kW] + 0.28 * curr_[c + kW];
         outLP_ = outLP_ * 0.995 + o * 0.005;
 
         if ((sampleIndex & 0x07FFULL) == 0ULL) {
             ptr_ = boundedIndex(ptr_ + static_cast<std::size_t>(13U + static_cast<int>(p1_ * 11.0)), memorySize_);
         }
 
-        return std::tanh((o + outLP_ * 0.25) * 2.2) * 15500.0;
+        return std::tanh((o + outLP_ * 0.20) * 1.85) * 13200.0;
     }
 
     void onMemorySizeChanged(std::size_t newMemorySize) override {
@@ -629,7 +629,7 @@ private:
         const int y = 1 + (b1 % (kH - 2));
         const int i = y * kW + x;
 
-        const double amp = ((static_cast<double>(b2) - 128.0) / 128.0) * (0.8 + macroMod * 1.8);
+        const double amp = ((static_cast<double>(b2) - 128.0) / 128.0) * (0.45 + macroMod * 1.10);
         curr_[i] += amp;
         curr_[i - 1] += amp * 0.3;
         curr_[i + 1] += amp * 0.3;
@@ -641,7 +641,7 @@ private:
             std::uniform_int_distribution<int> yd(1, kH - 2);
             const int rx = xd(*rng_);
             const int ry = yd(*rng_);
-            curr_[ry * kW + rx] += amp * 0.55;
+            curr_[ry * kW + rx] += amp * 0.35;
         }
 
         exciteInterval_ = std::max(1, static_cast<int>(
@@ -729,7 +729,7 @@ public:
             ptr_ = boundedIndex(ptr_ + static_cast<std::size_t>(3U + m), memorySize_);
         }
 
-        return std::tanh(norm * (3.8 + static_cast<double>(m) / 180.0)) * 16500.0;
+        return std::tanh(norm * (4.6 + static_cast<double>(m) / 130.0)) * 19000.0;
     }
 
     void onMemorySizeChanged(std::size_t newMemorySize) override {
