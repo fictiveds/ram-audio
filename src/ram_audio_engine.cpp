@@ -748,6 +748,131 @@ private:
     std::mt19937& rng_;
 };
 
+class BandSplitMixer final {
+public:
+    BandSplitMixer(int sampleRate,
+                   double baseLowHz,
+                   double baseHighHz,
+                   double driftHz,
+                   bool pinFamilies)
+        : sampleRate_(std::max(1, sampleRate)),
+          baseLowHz_(std::clamp(baseLowHz, 40.0, 1200.0)),
+          baseHighHz_(std::clamp(baseHighHz, 800.0, 12000.0)),
+          driftHz_(std::max(0.0, driftHz)),
+          pinFamilies_(pinFamilies),
+          lowState_(0.0),
+          highState_(0.0),
+          prevIn_(0.0),
+          previousOut_(0.0),
+          lfoPhase_(0.0) {
+        if (baseLowHz_ >= baseHighHz_) {
+            baseLowHz_ = std::min(baseLowHz_, baseHighHz_ * 0.35);
+        }
+    }
+
+    double process(const SceneState& scene,
+                   const std::vector<VoiceDescriptor>& voices,
+                   const std::vector<double>& voiceSamples) {
+        const double drift = std::sin(lfoPhase_) * driftHz_;
+        const double lowHz = std::clamp(baseLowHz_ + drift, 30.0, baseHighHz_ - 40.0);
+        const double highHz = std::clamp(baseHighHz_ - drift * 0.65, lowHz + 40.0,
+                                         std::min(18000.0, 0.49 * static_cast<double>(sampleRate_)));
+        lfoPhase_ += (2.0 * kPi * 0.07) / static_cast<double>(sampleRate_);
+        if (lfoPhase_ > 2.0 * kPi) {
+            lfoPhase_ -= 2.0 * kPi;
+        }
+
+        const double lowAlpha = onePoleAlpha(lowHz);
+        const double highAlpha = onePoleAlpha(highHz);
+
+        double in = 0.0;
+        if (!voiceSamples.empty()) {
+            if (pinFamilies_ && voices.size() == voiceSamples.size()) {
+                in = mixPinnedFamilies(voices, voiceSamples, scene.macroMod);
+            } else {
+                for (double s : voiceSamples) {
+                    in += s;
+                }
+            }
+        }
+
+        lowState_ += lowAlpha * (in - lowState_);
+        const double hp1 = in - lowState_;
+        highState_ = highAlpha * (highState_ + hp1 - prevIn_);
+        prevIn_ = hp1;
+        const double bandLow = lowState_;
+        const double bandHigh = highState_;
+        const double bandMid = in - bandLow - bandHigh;
+
+        const double density = std::clamp(scene.macroMod, 0.0, 1.0);
+        const double lowGain = 0.80 + 0.35 * density;
+        const double midGain = 0.88 + 0.28 * (1.0 - std::fabs(0.5 - density) * 2.0);
+        const double highGain = 0.74 + 0.42 * (1.0 - density);
+
+        const double mixed = bandLow * lowGain + bandMid * midGain + bandHigh * highGain;
+        const double smooth = 0.06 + 0.16 * density;
+        previousOut_ += smooth * (mixed - previousOut_);
+        return previousOut_;
+    }
+
+private:
+    static double familyHash01(const std::string& id) {
+        std::uint32_t h = 2166136261u;
+        for (char c : id) {
+            h ^= static_cast<std::uint8_t>(c);
+            h *= 16777619u;
+        }
+        return static_cast<double>(h % 10000u) / 9999.0;
+    }
+
+    double onePoleAlpha(double cutoffHz) const {
+        const double c = std::max(1.0, cutoffHz);
+        const double rc = 1.0 / (2.0 * kPi * c);
+        const double dt = 1.0 / static_cast<double>(sampleRate_);
+        return dt / (rc + dt);
+    }
+
+    static double softSign(double x) {
+        return x / (1.0 + std::fabs(x));
+    }
+
+    double mixPinnedFamilies(const std::vector<VoiceDescriptor>& voices,
+                             const std::vector<double>& voiceSamples,
+                             double macroMod) const {
+        double low = 0.0;
+        double mid = 0.0;
+        double high = 0.0;
+
+        for (std::size_t i = 0; i < voices.size(); ++i) {
+            const double s = voiceSamples[i];
+            const double bucket = familyHash01(voices[i].algorithmId);
+            if (bucket < 0.34) {
+                low += s;
+            } else if (bucket < 0.67) {
+                mid += s;
+            } else {
+                high += s;
+            }
+        }
+
+        const double tilt = softSign((macroMod - 0.5) * 2.0);
+        return low * (0.9 + 0.2 * (1.0 - tilt)) +
+               mid * 0.85 +
+               high * (0.9 + 0.2 * (1.0 + tilt));
+    }
+
+    int sampleRate_;
+    double baseLowHz_;
+    double baseHighHz_;
+    double driftHz_;
+    bool pinFamilies_;
+    double lowState_;
+    double highState_;
+    double prevIn_;
+    double previousOut_;
+    double lfoPhase_;
+};
+
 }  // namespace
 
 RamAudioEngine::SynthVoice::SynthVoice(std::unique_ptr<IRamAlgorithm> algorithm,
@@ -1110,6 +1235,11 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                               config_.noveltyHistory,
                               config_.noveltyCooldownSec,
                               config_.sampleRate);
+    BandSplitMixer bandMixer(config_.sampleRate,
+                             config_.bandSplitLowHz,
+                             config_.bandSplitHighHz,
+                             config_.bandSplitDriftHz,
+                             config_.bandPinFamilies);
 
     const int crossfadeSamples = std::max(
         0,
@@ -1275,6 +1405,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         }
 
         smoothedSample = mixPolicy_->mix(sceneState, voiceDescriptors, voiceSamples, smoothedSample);
+        smoothedSample = bandMixer.process(sceneState, voiceDescriptors, voiceSamples);
         if (!std::isfinite(smoothedSample)) {
             smoothedSample = 0.0;
         }

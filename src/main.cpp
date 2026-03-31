@@ -60,6 +60,10 @@ struct CliOptions {
     int noveltyHistory = 48;
     int noveltyCooldownSec = 6;
     int noveltySpawnExtra = 2;
+    double bandSplitLowHz = 220.0;
+    double bandSplitHighHz = 2600.0;
+    double bandSplitDriftHz = 90.0;
+    bool bandPinFamilies = false;
     unsigned int seed = 0;
     bool verbose = true;
     bool listAlgorithms = false;
@@ -217,6 +221,10 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --novelty-history <n>      размер окна fingerprint history\n"
         << "  --novelty-cooldown <sec>   cooldown recovery novelty-guard\n"
         << "  --novelty-spawn-extra <n>  доп. голоса при срабатывании novelty-guard\n"
+        << "  --band-low-hz <v>          нижняя частота раздела band-split (по умолчанию 220)\n"
+        << "  --band-high-hz <v>         верхняя частота раздела band-split (по умолчанию 2600)\n"
+        << "  --band-drift-hz <v>        амплитуда дрейфа частот раздела (по умолчанию 90)\n"
+        << "  --band-pin-families        закреплять семейства голосов за полосами\n"
         << "  --list-algorithms          показать доступные алгоритмы\n"
         << "  --seed <num>               фиксировать seed (0 = случайный)\n"
         << "  --quiet                    отключить лог прогресса\n"
@@ -473,6 +481,23 @@ bool parseCli(int argc,
                 error = "Некорректное значение --novelty-spawn-extra";
                 return false;
             }
+        } else if (isFlag(arg, "--band-low-hz")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.bandSplitLowHz)) {
+                error = "Некорректное значение --band-low-hz";
+                return false;
+            }
+        } else if (isFlag(arg, "--band-high-hz")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.bandSplitHighHz)) {
+                error = "Некорректное значение --band-high-hz";
+                return false;
+            }
+        } else if (isFlag(arg, "--band-drift-hz")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.bandSplitDriftHz)) {
+                error = "Некорректное значение --band-drift-hz";
+                return false;
+            }
+        } else if (isFlag(arg, "--band-pin-families")) {
+            options.bandPinFamilies = true;
         } else if (isFlag(arg, "--min-voices")) {
             if (!requireValue(arg, value) || !parseInt(value, options.minVoices)) {
                 error = "Некорректное значение --min-voices";
@@ -703,6 +728,26 @@ bool parseCli(int argc,
         return false;
     }
 
+    if (options.bandSplitLowHz < 40.0 || options.bandSplitLowHz > 1200.0) {
+        error = "--band-low-hz должен быть в диапазоне [40, 1200]";
+        return false;
+    }
+
+    if (options.bandSplitHighHz < 800.0 || options.bandSplitHighHz > 12000.0) {
+        error = "--band-high-hz должен быть в диапазоне [800, 12000]";
+        return false;
+    }
+
+    if (options.bandSplitLowHz >= options.bandSplitHighHz) {
+        error = "--band-low-hz должен быть меньше --band-high-hz";
+        return false;
+    }
+
+    if (options.bandSplitDriftHz < 0.0 || options.bandSplitDriftHz > 2000.0) {
+        error = "--band-drift-hz должен быть в диапазоне [0, 2000]";
+        return false;
+    }
+
     return true;
 }
 
@@ -750,6 +795,10 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.noveltyHistory = options.noveltyHistory;
     config.noveltyCooldownSec = options.noveltyCooldownSec;
     config.noveltySpawnExtra = options.noveltySpawnExtra;
+    config.bandSplitLowHz = options.bandSplitLowHz;
+    config.bandSplitHighHz = options.bandSplitHighHz;
+    config.bandSplitDriftHz = options.bandSplitDriftHz;
+    config.bandPinFamilies = options.bandPinFamilies;
     config.seed = options.seed;
     config.verbose = options.verbose;
     config.stopFlag = &gStopRequested;

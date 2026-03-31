@@ -110,6 +110,10 @@ struct EngineConfig {
     int noveltyHistory = 48;
     int noveltyCooldownSec = 6;
     int noveltySpawnExtra = 2;
+    double bandSplitLowHz = 220.0;
+    double bandSplitHighHz = 2600.0;
+    double bandSplitDriftHz = 90.0;
+    bool bandPinFamilies = false;
     unsigned int seed = 0;
     bool verbose = true;
     const volatile std::sig_atomic_t* stopFlag = nullptr;

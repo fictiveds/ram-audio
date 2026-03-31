@@ -162,7 +162,7 @@
 
 ### Epic E4 - Mixing and Cross-Modulation
 
-#### [ ] T4.1 Implement `band_split_mixer`
+#### [x] T4.1 Implement `band_split_mixer`
 - Description: многополосный микшер (low/mid/high) с дрейфом частот раздела.
 - DoD:
   - Реализованы кроссоверы с минимальной фазовой/амплитудной ошибкой для текущих ограничений проекта.
