@@ -1,5 +1,6 @@
 build/
 *.wav
+*.mp3
 *.pcm
 *.raw
 *.tmp
