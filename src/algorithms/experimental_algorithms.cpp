@@ -925,6 +925,461 @@ private:
     double formulaMix_;
 };
 
+class InharmonicResonatorSwarm final : public IRamAlgorithm {
+public:
+    InharmonicResonatorSwarm(std::size_t memorySize, int sampleRate, std::mt19937& rng)
+        : memorySize_(std::max<std::size_t>(1, memorySize)),
+          sampleRate_(std::max(1, sampleRate)),
+          ptr_(static_cast<std::size_t>(randomIntInclusive(rng, 0, static_cast<int>(memorySize_) - 1))),
+          p1_(randomDouble(rng, 0.1, 10.0)),
+          strikeCounter_(0),
+          rng_(&rng) {
+        static const std::array<double, kN> kRatios = {
+            1.000, 1.271, 1.618, 1.932, 2.414, 2.732, 3.141, 3.877,
+        };
+
+        const double base = 42.0 + p1_ * 6.0;
+        for (int i = 0; i < kN; ++i) {
+            phase_[i] = randomDouble(rng, 0.0, 2.0 * kPi);
+            amp_[i] = randomDouble(rng, 0.0, 1.0);
+            freq_[i] = base * kRatios[static_cast<std::size_t>(i)] * randomDouble(rng, 0.85, 1.2);
+            damp_[i] = randomDouble(rng, 0.9991, 0.99993);
+        }
+    }
+
+    const std::string& id() const override {
+        static const std::string kId = "inharmonic_resonator_swarm";
+        return kId;
+    }
+
+    bool prefersHighResolution() const override {
+        return false;
+    }
+
+    double generate(std::uint64_t sampleIndex,
+                    const std::vector<std::uint8_t>& memory,
+                    double macroMod) override {
+        if (memory.empty()) {
+            return 0.0;
+        }
+
+        ++strikeCounter_;
+        const std::size_t idx = boundedIndex(ptr_ + static_cast<std::size_t>(sampleIndex % 32768ULL), memorySize_);
+        const std::uint8_t b = memory[idx];
+
+        const int strikePeriod = std::max(1, static_cast<int>(
+            static_cast<double>(sampleRate_) / (4.0 + macroMod * 18.0 + static_cast<double>(b & 0x0FU) * 0.15)));
+
+        if (strikeCounter_ >= strikePeriod || b > 244U || b < 12U) {
+            strikeCounter_ = 0;
+            triggerStrike(memory, idx, macroMod);
+        }
+
+        double y = 0.0;
+        for (int i = 0; i < kN; ++i) {
+            phase_[i] += (2.0 * kPi * freq_[i]) / static_cast<double>(sampleRate_);
+            while (phase_[i] >= 2.0 * kPi) {
+                phase_[i] -= 2.0 * kPi;
+            }
+            amp_[i] *= damp_[i];
+            y += std::sin(phase_[i]) * amp_[i];
+        }
+
+        if ((sampleIndex & 0x0FFFULL) == 0ULL) {
+            ptr_ = boundedIndex(ptr_ + static_cast<std::size_t>(7U + b + static_cast<int>(p1_ * 9.0)), memorySize_);
+        }
+
+        return std::tanh(y * 2.6) * 17000.0;
+    }
+
+    void onMemorySizeChanged(std::size_t newMemorySize) override {
+        memorySize_ = std::max<std::size_t>(1, newMemorySize);
+        ptr_ %= memorySize_;
+    }
+
+private:
+    static constexpr int kN = 8;
+
+    void triggerStrike(const std::vector<std::uint8_t>& memory,
+                       std::size_t idx,
+                       double macroMod) {
+        if (rng_ == nullptr) {
+            return;
+        }
+
+        const double hit = (static_cast<double>(memory[idx]) - 128.0) / 128.0;
+        const double spread = 0.15 + macroMod * 0.65;
+
+        for (int i = 0; i < kN; ++i) {
+            const std::size_t i2 = boundedIndex(idx + static_cast<std::size_t>(i * 5), memorySize_);
+            const double v = (static_cast<double>(memory[i2]) - 128.0) / 128.0;
+            const double excite = (0.20 + std::fabs(v) * 0.80) * (0.35 + std::fabs(hit) * 0.65);
+            amp_[i] = std::clamp(amp_[i] + excite * spread, 0.0, 1.6);
+
+            const double drift = 1.0 + v * (0.035 + macroMod * 0.08);
+            freq_[i] = std::clamp(freq_[i] * drift, 25.0, 13000.0);
+            damp_[i] = std::clamp(damp_[i] - 0.00003 * std::fabs(v) + macroMod * 0.00002, 0.9987, 0.99995);
+        }
+    }
+
+    std::size_t memorySize_;
+    int sampleRate_;
+    std::size_t ptr_;
+    double p1_;
+    std::array<double, kN> phase_{};
+    std::array<double, kN> amp_{};
+    std::array<double, kN> freq_{};
+    std::array<double, kN> damp_{};
+    int strikeCounter_;
+    std::mt19937* rng_;
+};
+
+class FdnTopologyChaos final : public IRamAlgorithm {
+public:
+    FdnTopologyChaos(std::size_t memorySize, int sampleRate, std::mt19937& rng)
+        : memorySize_(std::max<std::size_t>(1, memorySize)),
+          sampleRate_(std::max(1, sampleRate)),
+          ptr_(static_cast<std::size_t>(randomIntInclusive(rng, 0, static_cast<int>(memorySize_) - 1))),
+          p1_(randomDouble(rng, 0.1, 10.0)),
+          matrixCounter_(0),
+          exciteCounter_(0),
+          rng_(&rng) {
+        static const std::array<int, kN> kPrimes = {163, 223, 317, 421, 557};
+        for (int i = 0; i < kN; ++i) {
+            const int scale = std::max(1, sampleRate_ / 44100);
+            lines_[i].assign(static_cast<std::size_t>(kPrimes[static_cast<std::size_t>(i)] * scale), 0.0);
+            pos_[i] = 0;
+            damp_[i] = randomDouble(rng, 0.84, 0.96);
+        }
+        randomizeMatrix();
+    }
+
+    const std::string& id() const override {
+        static const std::string kId = "fdn_topology_chaos";
+        return kId;
+    }
+
+    bool prefersHighResolution() const override {
+        return false;
+    }
+
+    double generate(std::uint64_t sampleIndex,
+                    const std::vector<std::uint8_t>& memory,
+                    double macroMod) override {
+        if (memory.empty()) {
+            return 0.0;
+        }
+
+        ++matrixCounter_;
+        ++exciteCounter_;
+
+        const std::size_t idx = boundedIndex(ptr_ + static_cast<std::size_t>(sampleIndex % 65536ULL), memorySize_);
+        const double mem = (static_cast<double>(memory[idx]) - 128.0) / 128.0;
+
+        const int matrixPeriod = std::max(32, static_cast<int>(
+            static_cast<double>(sampleRate_) / (1.2 + macroMod * 5.5)));
+        if (matrixCounter_ >= matrixPeriod || (memory[idx] > 250U)) {
+            matrixCounter_ = 0;
+            randomizeMatrix();
+        }
+
+        const int excitePeriod = std::max(1, static_cast<int>(
+            static_cast<double>(sampleRate_) / (6.0 + macroMod * 22.0)));
+        const bool excite = (exciteCounter_ >= excitePeriod) || (memory[idx] < 10U);
+        if (excite) {
+            exciteCounter_ = 0;
+        }
+        const double in = mem * (excite ? 1.25 : 0.18);
+
+        std::array<double, kN> o{};
+        for (int i = 0; i < kN; ++i) {
+            o[i] = lines_[i][pos_[i]];
+        }
+
+        for (int i = 0; i < kN; ++i) {
+            double s = 0.0;
+            for (int j = 0; j < kN; ++j) {
+                s += matrix_[i][j] * o[j];
+            }
+            const double fb = std::tanh(s * (0.75 + macroMod * 0.22));
+            const double write = std::tanh((fb * damp_[i]) + in * (i == 0 ? 1.0 : 0.22));
+            lines_[i][pos_[i]] = write;
+            pos_[i] = (pos_[i] + 1) % lines_[i].size();
+        }
+
+        if ((sampleIndex & 0x07FFULL) == 0ULL) {
+            ptr_ = boundedIndex(ptr_ + static_cast<std::size_t>(11U + memory[idx] + static_cast<int>(p1_ * 5.0)), memorySize_);
+        }
+
+        const double y = o[0] * 0.44 - o[1] * 0.27 + o[2] * 0.21 - o[3] * 0.14 + o[4] * 0.09;
+        return std::tanh(y * 3.3) * 18000.0;
+    }
+
+    void onMemorySizeChanged(std::size_t newMemorySize) override {
+        memorySize_ = std::max<std::size_t>(1, newMemorySize);
+        ptr_ %= memorySize_;
+    }
+
+private:
+    static constexpr int kN = 5;
+
+    void randomizeMatrix() {
+        if (rng_ == nullptr) {
+            return;
+        }
+        std::uniform_real_distribution<double> d(-1.0, 1.0);
+        for (int i = 0; i < kN; ++i) {
+            double norm = 0.0;
+            for (int j = 0; j < kN; ++j) {
+                matrix_[i][j] = d(*rng_);
+                norm += std::fabs(matrix_[i][j]);
+            }
+            const double s = (norm > 1e-9) ? (0.88 / norm) : 1.0;
+            for (int j = 0; j < kN; ++j) {
+                matrix_[i][j] *= s;
+            }
+        }
+    }
+
+    std::size_t memorySize_;
+    int sampleRate_;
+    std::size_t ptr_;
+    double p1_;
+    std::array<std::vector<double>, kN> lines_{};
+    std::array<std::size_t, kN> pos_{};
+    std::array<double, kN> damp_{};
+    std::array<std::array<double, kN>, kN> matrix_{};
+    int matrixCounter_;
+    int exciteCounter_;
+    std::mt19937* rng_;
+};
+
+class SpectralHolePuncher final : public IRamAlgorithm {
+public:
+    SpectralHolePuncher(std::size_t memorySize, int sampleRate, std::mt19937& rng)
+        : memorySize_(std::max<std::size_t>(1, memorySize)),
+          sampleRate_(std::max(1, sampleRate)),
+          ptr_(static_cast<std::size_t>(randomIntInclusive(rng, 0, static_cast<int>(memorySize_) - 1))),
+          p1_(randomDouble(rng, 0.1, 10.0)),
+          rng_(&rng) {
+        init();
+    }
+
+    const std::string& id() const override {
+        static const std::string kId = "spectral_hole_puncher";
+        return kId;
+    }
+
+    bool prefersHighResolution() const override {
+        return false;
+    }
+
+    double generate(std::uint64_t sampleIndex,
+                    const std::vector<std::uint8_t>& memory,
+                    double macroMod) override {
+        if (memory.empty()) {
+            return 0.0;
+        }
+
+        if (queue_.empty()) {
+            processBlock(memory, sampleIndex, macroMod);
+        }
+        if (queue_.empty()) {
+            return 0.0;
+        }
+
+        const double out = queue_.front();
+        queue_.pop_front();
+        return out;
+    }
+
+    void onMemorySizeChanged(std::size_t newMemorySize) override {
+        memorySize_ = std::max<std::size_t>(1, newMemorySize);
+        ptr_ %= memorySize_;
+    }
+
+private:
+    static constexpr int kN = 96;
+    static constexpr int kHop = 24;
+    static constexpr int kBins = 18;
+
+    void init() {
+        for (int n = 0; n < kN; ++n) {
+            window_[n] = 0.5 - 0.5 * std::cos(2.0 * kPi * static_cast<double>(n) / static_cast<double>(kN - 1));
+        }
+        for (int b = 0; b < kBins; ++b) {
+            const int bin = b + 1;
+            for (int n = 0; n < kN; ++n) {
+                const double ph = 2.0 * kPi * static_cast<double>(bin * n) / static_cast<double>(kN);
+                cosTable_[b * kN + n] = std::cos(ph);
+                sinTable_[b * kN + n] = std::sin(ph);
+            }
+        }
+    }
+
+    void processBlock(const std::vector<std::uint8_t>& memory,
+                      std::uint64_t sampleIndex,
+                      double macroMod) {
+        const std::size_t stride = static_cast<std::size_t>(1 + static_cast<int>(macroMod * 2.0 + p1_ * 0.05));
+        for (int n = 0; n < kN; ++n) {
+            const std::size_t idx = boundedIndex(ptr_ + static_cast<std::size_t>(n) * stride, memorySize_);
+            frame_[n] = ((static_cast<double>(memory[idx]) - 128.0) / 128.0) * window_[n];
+        }
+
+        for (int b = 0; b < kBins; ++b) {
+            double re = 0.0;
+            double im = 0.0;
+            const int base = b * kN;
+            for (int n = 0; n < kN; ++n) {
+                re += frame_[n] * cosTable_[base + n];
+                im -= frame_[n] * sinTable_[base + n];
+            }
+            mags_[b] = std::sqrt(re * re + im * im) / static_cast<double>(kN);
+            phases_[b] = std::atan2(im, re);
+        }
+
+        const std::size_t idx = boundedIndex(ptr_ + static_cast<std::size_t>(sampleIndex % 8192ULL), memorySize_);
+        const int center = static_cast<int>(memory[idx] % static_cast<std::uint8_t>(kBins));
+        const int width = 1 + static_cast<int>(memory[boundedIndex(idx + 1, memorySize_)] % 4);
+        const double punch = 0.08 + macroMod * 0.26;
+
+        for (int b = 0; b < kBins; ++b) {
+            const int d = std::abs(b - center);
+            if (d <= width) {
+                mags_[b] *= punch;
+            } else if (d <= width + 2) {
+                mags_[b] *= 0.45 + punch * 0.4;
+            }
+        }
+
+        for (int n = 0; n < kN; ++n) {
+            double s = 0.0;
+            for (int b = 0; b < kBins; ++b) {
+                const double ph = phases_[b] + 2.0 * kPi * static_cast<double>((b + 1) * n) / static_cast<double>(kN);
+                s += mags_[b] * std::cos(ph);
+            }
+            synth_[n] = s * window_[n] * 3.0;
+        }
+
+        for (int n = 0; n < kN; ++n) {
+            overlap_[n] += synth_[n];
+        }
+        for (int n = 0; n < kHop; ++n) {
+            queue_.push_back(std::tanh(overlap_[n] * 3.8) * 17800.0);
+        }
+        for (int n = 0; n < (kN - kHop); ++n) {
+            overlap_[n] = overlap_[n + kHop];
+        }
+        for (int n = (kN - kHop); n < kN; ++n) {
+            overlap_[n] = 0.0;
+        }
+
+        ptr_ = boundedIndex(ptr_ + static_cast<std::size_t>(5U + memory[idx]), memorySize_);
+    }
+
+    std::size_t memorySize_;
+    int sampleRate_;
+    std::size_t ptr_;
+    double p1_;
+    std::array<double, kN> frame_{};
+    std::array<double, kN> window_{};
+    std::array<double, kN> synth_{};
+    std::array<double, kN> overlap_{};
+    std::array<double, kBins * kN> cosTable_{};
+    std::array<double, kBins * kN> sinTable_{};
+    std::array<double, kBins> mags_{};
+    std::array<double, kBins> phases_{};
+    std::deque<double> queue_;
+    std::mt19937* rng_;
+};
+
+class GranularPointerShredder final : public IRamAlgorithm {
+public:
+    GranularPointerShredder(std::size_t memorySize, int sampleRate, std::mt19937& rng)
+        : memorySize_(std::max<std::size_t>(1, memorySize)),
+          sampleRate_(std::max(1, sampleRate)),
+          ptr_(static_cast<std::size_t>(randomIntInclusive(rng, 0, static_cast<int>(memorySize_) - 1))),
+          p1_(randomDouble(rng, 0.1, 10.0)),
+          grainPos_(0),
+          grainLen_(std::max(32, sampleRate_ / 90)),
+          grainStep_(1),
+          reverse_(false),
+          env_(0.0),
+          rng_(&rng) {
+        rebuildGrain();
+    }
+
+    const std::string& id() const override {
+        static const std::string kId = "granular_pointer_shredder";
+        return kId;
+    }
+
+    bool prefersHighResolution() const override {
+        return false;
+    }
+
+    double generate(std::uint64_t sampleIndex,
+                    const std::vector<std::uint8_t>& memory,
+                    double macroMod) override {
+        if (memory.empty()) {
+            return 0.0;
+        }
+
+        if (grainPos_ >= grainLen_) {
+            rebuildGrain();
+        }
+
+        const double gp = static_cast<double>(grainPos_) / static_cast<double>(std::max(1, grainLen_ - 1));
+        const double envWin = 0.5 - 0.5 * std::cos(2.0 * kPi * gp);
+
+        const int local = reverse_ ? (grainLen_ - 1 - grainPos_) : grainPos_;
+        const std::size_t idx = boundedIndex(ptr_ + static_cast<std::size_t>(std::max(0, local) * std::max(1, grainStep_)), memorySize_);
+        const std::size_t i1 = boundedIndex(idx + static_cast<std::size_t>(7 + (sampleIndex % 13ULL)), memorySize_);
+
+        const double a = (static_cast<double>(memory[idx]) - 128.0) / 128.0;
+        const double b = (static_cast<double>(memory[i1]) - 128.0) / 128.0;
+        env_ = env_ * 0.92 + a * 0.08;
+
+        const double out = (a * 0.65 + b * 0.35 + env_ * (0.25 + macroMod * 0.4)) * envWin;
+
+        ++grainPos_;
+        if ((sampleIndex & 0x03FFULL) == 0ULL) {
+            ptr_ = boundedIndex(ptr_ + static_cast<std::size_t>(3U + memory[idx]), memorySize_);
+        }
+
+        return std::tanh(out * 5.0) * 18000.0;
+    }
+
+    void onMemorySizeChanged(std::size_t newMemorySize) override {
+        memorySize_ = std::max<std::size_t>(1, newMemorySize);
+        ptr_ %= memorySize_;
+    }
+
+private:
+    void rebuildGrain() {
+        if (rng_ != nullptr) {
+            std::uniform_int_distribution<int> lenDist(std::max(20, sampleRate_ / 220), std::max(28, sampleRate_ / 40));
+            std::uniform_int_distribution<int> stepDist(1, 19);
+            std::bernoulli_distribution rev(0.35 + std::min(0.45, p1_ * 0.03));
+            grainLen_ = lenDist(*rng_);
+            grainStep_ = stepDist(*rng_);
+            reverse_ = rev(*rng_);
+        }
+        grainPos_ = 0;
+    }
+
+    std::size_t memorySize_;
+    int sampleRate_;
+    std::size_t ptr_;
+    double p1_;
+    int grainPos_;
+    int grainLen_;
+    int grainStep_;
+    bool reverse_;
+    double env_;
+    std::mt19937* rng_;
+};
+
 }  // namespace
 
 namespace ram_audio {
@@ -975,6 +1430,38 @@ void registerExperimentalAlgorithms(AlgorithmRegistry& registry) {
         "Bytebeat Formula Evolver",
         [](std::size_t memorySize, int sampleRate, std::mt19937& rng) {
             return std::make_unique<BytebeatFormulaEvolver>(memorySize, sampleRate, rng);
+        },
+    });
+
+    registry.registerAlgorithm({
+        "inharmonic_resonator_swarm",
+        "Inharmonic Resonator Swarm",
+        [](std::size_t memorySize, int sampleRate, std::mt19937& rng) {
+            return std::make_unique<InharmonicResonatorSwarm>(memorySize, sampleRate, rng);
+        },
+    });
+
+    registry.registerAlgorithm({
+        "fdn_topology_chaos",
+        "FDN Topology Chaos",
+        [](std::size_t memorySize, int sampleRate, std::mt19937& rng) {
+            return std::make_unique<FdnTopologyChaos>(memorySize, sampleRate, rng);
+        },
+    });
+
+    registry.registerAlgorithm({
+        "spectral_hole_puncher",
+        "Spectral Hole Puncher",
+        [](std::size_t memorySize, int sampleRate, std::mt19937& rng) {
+            return std::make_unique<SpectralHolePuncher>(memorySize, sampleRate, rng);
+        },
+    });
+
+    registry.registerAlgorithm({
+        "granular_pointer_shredder",
+        "Granular Pointer Shredder",
+        [](std::size_t memorySize, int sampleRate, std::mt19937& rng) {
+            return std::make_unique<GranularPointerShredder>(memorySize, sampleRate, rng);
         },
     });
 }
