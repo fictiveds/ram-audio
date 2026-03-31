@@ -84,28 +84,28 @@
   - При фиксированном `--seed` результат детерминирован.
   - События генерируются без "залипания" в одном состоянии дольше заданного лимита.
 
-#### T2.3 Implement `fdn_prime_feedback`
+#### [x] T2.3 Implement `fdn_prime_feedback`
 - Description: feedback delay network с prime-length линиями, параметризованными RAM.
 - DoD:
   - Минимум 6 delay-линий, длины выбираются из простых чисел.
   - Есть защита устойчивости (feedback < 1, limiter в контуре или post).
   - Нет runaway-энергии на 30-минутном стриме.
 
-#### T2.4 Implement `spectral_freeze_permuter`
+#### [x] T2.4 Implement `spectral_freeze_permuter`
 - Description: STFT freeze + перестановка/маскирование бинов на основе RAM-энтропии.
 - DoD:
   - Реализованы windowing + overlap-add без слышимых щелчков на границах.
   - Есть freeze/unfreeze и permutation depth.
   - CPU budget укладывается в целевой режим (реалтайм 44.1kHz mono).
 
-#### T2.5 Implement `modal_mesh_exciter`
+#### [x] T2.5 Implement `modal_mesh_exciter`
 - Description: модальная/сеточная физическая модель, возбуждаемая RAM-импульсами.
 - DoD:
   - Реализована численно стабильная схема (ограничения шага и коэффициентов).
   - Есть управление демпфированием и плотностью возбуждений через macroMod/RAM.
   - Звук остается разнообразным при смене PID/памяти без тишины.
 
-#### T2.6 Implement `bytebeat_formula_evolver`
+#### [x] T2.6 Implement `bytebeat_formula_evolver`
 - Description: генерация и мутация bytebeat-формул с отбором по novelty score.
 - DoD:
   - Есть grammar/AST или безопасный генератор формул без UB.
