@@ -92,6 +92,8 @@ struct EngineConfig {
     double switchProbEnergyWeight = 0.28;
     double switchProbNoveltyWeight = 0.36;
     double switchProbHysteresis = 0.08;
+    int hmmTabuWindow = 3;
+    double hmmNoveltyBias = 0.22;
     double noveltyThreshold = 0.93;
     int noveltyHistory = 48;
     int noveltyCooldownSec = 6;

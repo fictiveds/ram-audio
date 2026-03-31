@@ -14,6 +14,7 @@
 #include <limits>
 #include <memory>
 #include <deque>
+#include <unordered_map>
 #include <sstream>
 #include <string>
 #include <sys/types.h>
@@ -492,6 +493,104 @@ private:
     std::deque<Fingerprint> history_;
 };
 
+class HmmWithTabuSelector final {
+public:
+    explicit HmmWithTabuSelector(int tabuWindow, double noveltyBias)
+        : tabuWindow_(std::max(0, tabuWindow)),
+          noveltyBias_(std::clamp(noveltyBias, 0.0, 1.0)),
+          transitions_(),
+          usage_(),
+          last_(),
+          initialized_(false) {}
+
+    std::string pick(const std::vector<AlgorithmEntry>& entries,
+                     const std::vector<std::string>& allowed,
+                     std::mt19937& rng) {
+        std::vector<std::string> candidates;
+        candidates.reserve(entries.size());
+
+        for (const auto& e : entries) {
+            if (!allowed.empty() &&
+                std::find(allowed.begin(), allowed.end(), e.id) == allowed.end()) {
+                continue;
+            }
+            candidates.push_back(e.id);
+            usage_.emplace(e.id, usage_[e.id]);
+            transitions_.emplace(e.id, std::unordered_map<std::string, double>());
+        }
+
+        if (candidates.empty()) {
+            return std::string();
+        }
+
+        if (!initialized_) {
+            initTransitions(candidates);
+            initialized_ = true;
+        }
+
+        std::vector<double> weights;
+        weights.reserve(candidates.size());
+        for (const auto& id : candidates) {
+            const bool tabued = std::find(last_.begin(), last_.end(), id) != last_.end();
+            double base = tabued ? 0.0 : 1.0;
+
+            if (!last_.empty()) {
+                const std::string& prev = last_.back();
+                auto rowIt = transitions_.find(prev);
+                if (rowIt != transitions_.end()) {
+                    auto it = rowIt->second.find(id);
+                    if (it != rowIt->second.end()) {
+                        base = tabued ? 0.0 : it->second;
+                    }
+                }
+            }
+
+            const double noveltyBonus = 1.0 + noveltyBias_ / (1.0 + static_cast<double>(usage_[id]));
+            weights.push_back(base * noveltyBonus);
+        }
+
+        double weightSum = 0.0;
+        for (double w : weights) {
+            weightSum += w;
+        }
+
+        std::size_t index = 0;
+        if (weightSum <= 1e-12) {
+            std::uniform_int_distribution<std::size_t> dist(0, candidates.size() - 1);
+            index = dist(rng);
+        } else {
+            std::discrete_distribution<std::size_t> dist(weights.begin(), weights.end());
+            index = dist(rng);
+        }
+
+        const std::string picked = candidates[index];
+        usage_[picked] += 1;
+        last_.push_back(picked);
+        while (static_cast<int>(last_.size()) > tabuWindow_) {
+            last_.pop_front();
+        }
+        return picked;
+    }
+
+private:
+    void initTransitions(const std::vector<std::string>& ids) {
+        const double p = 1.0 / static_cast<double>(std::max<std::size_t>(1, ids.size()));
+        for (const auto& from : ids) {
+            auto& row = transitions_[from];
+            for (const auto& to : ids) {
+                row[to] = p;
+            }
+        }
+    }
+
+    int tabuWindow_;
+    double noveltyBias_;
+    std::unordered_map<std::string, std::unordered_map<std::string, double>> transitions_;
+    std::unordered_map<std::string, int> usage_;
+    std::deque<std::string> last_;
+    bool initialized_;
+};
+
 }  // namespace
 
 RamAudioEngine::SynthVoice::SynthVoice(std::unique_ptr<IRamAlgorithm> algorithm,
@@ -649,6 +748,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
     }
 
     std::vector<SynthVoice> voices;
+    HmmWithTabuSelector hmmSelector(config_.hmmTabuWindow, config_.hmmNoveltyBias);
 
     auto isAllowed = [&](const std::string& id) {
         if (config_.allowedAlgorithmIds.empty()) {
@@ -661,9 +761,10 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
 
     auto createVoice = [&](bool anchor, const std::string& preferredId = std::string()) -> bool {
         std::unique_ptr<IRamAlgorithm> algo;
+        std::string selectedId = preferredId;
 
-        if (!preferredId.empty() && registry_.has(preferredId) && isAllowed(preferredId)) {
-            algo = registry_.create(preferredId, snapshot.bytes.size(), config_.sampleRate, rng_);
+        if (!selectedId.empty() && registry_.has(selectedId) && isAllowed(selectedId)) {
+            algo = registry_.create(selectedId, snapshot.bytes.size(), config_.sampleRate, rng_);
         }
 
         if (!algo && anchor) {
@@ -683,6 +784,16 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                 if (algo) {
                     break;
                 }
+            }
+        }
+
+        if (!algo) {
+            selectedId = hmmSelector.pick(registry_.entries(), config_.allowedAlgorithmIds, rng_);
+            if (!selectedId.empty() && registry_.has(selectedId) && isAllowed(selectedId)) {
+                algo = registry_.create(selectedId,
+                                        snapshot.bytes.size(),
+                                        config_.sampleRate,
+                                        rng_);
             }
         }
 

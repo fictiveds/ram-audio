@@ -43,6 +43,8 @@ struct CliOptions {
     double switchProbEnergyWeight = 0.28;
     double switchProbNoveltyWeight = 0.36;
     double switchProbHysteresis = 0.08;
+    int hmmTabuWindow = 3;
+    double hmmNoveltyBias = 0.22;
     double noveltyThreshold = 0.93;
     int noveltyHistory = 48;
     int noveltyCooldownSec = 6;
@@ -187,6 +189,8 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --switch-prob-energy <v>   вес energy в switch-prob [0..1] (по умолчанию 0.28)\n"
         << "  --switch-prob-novelty <v>  вес novelty в switch-prob [0..1] (по умолчанию 0.36)\n"
         << "  --switch-prob-hyst <v>     hysteresis для switch-prob [0..1] (по умолчанию 0.08)\n"
+        << "  --hmm-tabu-window <n>      tabu-окно для повторов алгоритмов (по умолчанию 3)\n"
+        << "  --hmm-novelty-bias <v>     bias к редким алгоритмам [0..1] (по умолчанию 0.22)\n"
         << "  --novelty-threshold <v>    threshold similarity для novelty-guard [0..1]\n"
         << "  --novelty-history <n>      размер окна fingerprint history\n"
         << "  --novelty-cooldown <sec>   cooldown recovery novelty-guard\n"
@@ -362,6 +366,16 @@ bool parseCli(int argc,
                 error = "Некорректное значение --switch-prob-hyst";
                 return false;
             }
+        } else if (isFlag(arg, "--hmm-tabu-window")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.hmmTabuWindow)) {
+                error = "Некорректное значение --hmm-tabu-window";
+                return false;
+            }
+        } else if (isFlag(arg, "--hmm-novelty-bias")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.hmmNoveltyBias)) {
+                error = "Некорректное значение --hmm-novelty-bias";
+                return false;
+            }
         } else if (isFlag(arg, "--novelty-threshold")) {
             if (!requireValue(arg, value) || !parseDouble(value, options.noveltyThreshold)) {
                 error = "Некорректное значение --novelty-threshold";
@@ -531,6 +545,16 @@ bool parseCli(int argc,
         return false;
     }
 
+    if (options.hmmTabuWindow < 0 || options.hmmTabuWindow > 16) {
+        error = "--hmm-tabu-window должен быть в диапазоне [0, 16]";
+        return false;
+    }
+
+    if (!inUnitRange(options.hmmNoveltyBias)) {
+        error = "--hmm-novelty-bias должен быть в диапазоне [0, 1]";
+        return false;
+    }
+
     if (!inUnitRange(options.noveltyThreshold)) {
         error = "--novelty-threshold должен быть в диапазоне [0, 1]";
         return false;
@@ -581,6 +605,8 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.switchProbEnergyWeight = options.switchProbEnergyWeight;
     config.switchProbNoveltyWeight = options.switchProbNoveltyWeight;
     config.switchProbHysteresis = options.switchProbHysteresis;
+    config.hmmTabuWindow = options.hmmTabuWindow;
+    config.hmmNoveltyBias = options.hmmNoveltyBias;
     config.noveltyThreshold = options.noveltyThreshold;
     config.noveltyHistory = options.noveltyHistory;
     config.noveltyCooldownSec = options.noveltyCooldownSec;
