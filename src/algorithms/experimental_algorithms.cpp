@@ -8,7 +8,6 @@
 #include <deque>
 #include <memory>
 #include <random>
-#include <limits>
 #include <string>
 #include <vector>
 
@@ -34,7 +33,7 @@ public:
     }
 
     bool prefersHighResolution() const override {
-        return true;
+        return false;
     }
 
     double generate(std::uint64_t sampleIndex,
@@ -127,7 +126,7 @@ public:
     }
 
     bool prefersHighResolution() const override {
-        return true;
+        return false;
     }
 
     double generate(std::uint64_t sampleIndex,
@@ -254,7 +253,8 @@ public:
           p1_(randomDouble(rng, 0.1, 10.0)),
           feedback_(randomDouble(rng, 0.78, 0.93)),
           wet_(randomDouble(rng, 0.45, 0.9)),
-          exciteCounter_(0) {
+          exciteCounter_(0),
+          modPhase_(0.0) {
         static const std::array<int, 6> kPrimeDelays = {149, 211, 283, 353, 431, 509};
         for (std::size_t i = 0; i < delay_.size(); ++i) {
             const int scale = std::max(1, sampleRate_ / 44100);
@@ -271,7 +271,7 @@ public:
     }
 
     bool prefersHighResolution() const override {
-        return true;
+        return false;
     }
 
     double generate(std::uint64_t sampleIndex,
@@ -298,7 +298,7 @@ public:
         if (pulse) {
             exciteCounter_ = 0;
         }
-        const double excite = memNorm * (pulse ? 1.1 : 0.28);
+        const double excite = memNorm * (pulse ? 1.35 : 0.22);
 
         std::array<double, 6> out{};
         for (std::size_t i = 0; i < delay_.size(); ++i) {
@@ -321,7 +321,13 @@ public:
             pos_[i] = (pos_[i] + 1) % delay_[i].size();
         }
 
-        const double y = out[0] * 0.38 + out[1] * 0.24 + out[2] * 0.16 + out[3] * 0.12 + out[4] * 0.07 + out[5] * 0.03;
+        modPhase_ += (2.0 * kPi * (0.08 + std::fabs(memNorm) * 0.25)) / static_cast<double>(sampleRate_);
+        while (modPhase_ >= 2.0 * kPi) {
+            modPhase_ -= 2.0 * kPi;
+        }
+
+        const double color = 0.82 + 0.18 * std::sin(modPhase_ + out[2] * 0.5);
+        const double y = (out[0] * 0.42 - out[1] * 0.27 + out[2] * 0.19 - out[3] * 0.11 + out[4] * 0.08 - out[5] * 0.04) * color;
 
         if ((sampleIndex & 0x0FFFULL) == 0ULL) {
             ptr_ = boundedIndex(ptr_ + static_cast<std::size_t>(17U + memory[idx] + static_cast<int>(p1_ * 11.0)), memorySize_);
@@ -346,6 +352,7 @@ private:
     double feedback_;
     double wet_;
     int exciteCounter_;
+    double modPhase_;
 };
 
 class SpectralFreezePermuter final : public IRamAlgorithm {
@@ -367,7 +374,7 @@ public:
     }
 
     bool prefersHighResolution() const override {
-        return true;
+        return false;
     }
 
     double generate(std::uint64_t sampleIndex,
@@ -396,9 +403,9 @@ public:
     }
 
 private:
-    static constexpr int kN = 256;
-    static constexpr int kHop = 64;
-    static constexpr int kBins = 48;
+    static constexpr int kN = 128;
+    static constexpr int kHop = 32;
+    static constexpr int kBins = 24;
 
     void initTables() {
         for (int n = 0; n < kN; ++n) {
@@ -442,10 +449,10 @@ private:
         const std::uint8_t trig = memory[trigIdx];
 
         if (!freeze_) {
-            const double trigProb = 0.01 + macroMod * 0.05 + (trig > 230U ? 0.12 : 0.0);
+            const double trigProb = 0.02 + macroMod * 0.08 + (trig > 230U ? 0.16 : 0.0);
             if (rng_ != nullptr && randomDouble(*rng_, 0.0, 1.0) < trigProb) {
                 freeze_ = true;
-                freezeBlocksLeft_ = 8 + (trig % 24);
+                freezeBlocksLeft_ = 4 + (trig % 14);
                 frozenMags_ = mags_;
                 frozenPhases_ = phases_;
             }
@@ -460,7 +467,7 @@ private:
             perm_[i] = i;
         }
 
-        const int depth = std::clamp(static_cast<int>((0.12 + macroMod * 0.75) * static_cast<double>(kBins)), 0, kBins - 1);
+        const int depth = std::clamp(static_cast<int>((0.25 + macroMod * 0.70) * static_cast<double>(kBins)), 0, kBins - 1);
         if (rng_ != nullptr) {
             for (int i = 0; i < depth; ++i) {
                 std::uniform_int_distribution<int> dist(i, kBins - 1);
@@ -479,7 +486,7 @@ private:
                 const double ph = usePhases[src] + 2.0 * kPi * static_cast<double>((b + 1) * n) / static_cast<double>(kN);
                 s += useMags[src] * std::cos(ph);
             }
-            synth_[n] = s * window_[n] * 1.8;
+            synth_[n] = s * window_[n] * 2.6;
         }
 
         for (int n = 0; n < kN; ++n) {
@@ -487,7 +494,7 @@ private:
         }
 
         for (int n = 0; n < kHop; ++n) {
-            outQueue_.push_back(std::tanh(overlap_[n] * (2.0 + macroMod)) * 13000.0);
+            outQueue_.push_back(std::tanh(overlap_[n] * (3.2 + macroMod * 0.6)) * 15500.0);
         }
 
         for (int n = 0; n < (kN - kHop); ++n) {
@@ -670,7 +677,8 @@ public:
           prevNorm_(0.0),
           zcAccum_(0),
           rng_(&rng),
-          tOffset_(static_cast<std::uint32_t>(randomIntInclusive(rng, 0, 1 << 20))) {
+          tOffset_(static_cast<std::uint32_t>(randomIntInclusive(rng, 0, 1 << 20))),
+          formulaMix_(0.0) {
         for (auto& g : population_) {
             g = randomGenome();
         }
@@ -693,8 +701,15 @@ public:
         const std::uint32_t t = static_cast<std::uint32_t>((sampleIndex + static_cast<std::uint64_t>(tOffset_)) *
                                                            static_cast<std::uint64_t>(1 + static_cast<int>(p1_ * 2.0)));
 
-        const std::uint8_t v = evalGenome(population_[active_], t, m);
-        const double norm = (static_cast<double>(v) - 128.0) / 128.0;
+        const std::uint8_t vA = evalGenome(population_[active_], t, m);
+        const int alt = (active_ + 3) % static_cast<int>(population_.size());
+        const std::uint8_t vB = evalGenome(population_[alt], t ^ (t >> 3U), static_cast<std::uint8_t>(m ^ 0x5AU));
+
+        formulaMix_ = 0.996 * formulaMix_ + 0.004 * (static_cast<double>(m) / 255.0);
+        const double blend = 0.25 + 0.55 * formulaMix_;
+        const double normA = (static_cast<double>(vA) - 128.0) / 128.0;
+        const double normB = (static_cast<double>(vB) - 128.0) / 128.0;
+        const double norm = std::clamp(normA * (1.0 - blend) + normB * blend, -1.0, 1.0);
 
         noveltyAccum_ += std::fabs(norm - prevNorm_);
         if ((norm >= 0.0) != (prevNorm_ >= 0.0)) {
@@ -714,7 +729,7 @@ public:
             ptr_ = boundedIndex(ptr_ + static_cast<std::size_t>(3U + m), memorySize_);
         }
 
-        return std::tanh(norm * (2.6 + static_cast<double>(m) / 255.0)) * 15000.0;
+        return std::tanh(norm * (3.8 + static_cast<double>(m) / 180.0)) * 16500.0;
     }
 
     void onMemorySizeChanged(std::size_t newMemorySize) override {
@@ -869,7 +884,7 @@ private:
         Genome best = population_[active_];
         double bestScore = currentScore;
 
-        for (int i = 0; i < 6; ++i) {
+        for (int i = 0; i < 16; ++i) {
             const Genome cand = mutate(population_[active_]);
             const std::uint64_t sig = signature(cand);
             if (isTabu(sig)) {
@@ -888,7 +903,7 @@ private:
 
         const std::uint64_t sig = signature(best);
         tabu_.push_back(sig);
-        while (tabu_.size() > 48) {
+        while (tabu_.size() > 128) {
             tabu_.pop_front();
         }
     }
@@ -907,6 +922,7 @@ private:
     std::deque<std::uint64_t> tabu_;
     std::mt19937* rng_;
     std::uint32_t tOffset_;
+    double formulaMix_;
 };
 
 }  // namespace
