@@ -34,6 +34,9 @@ struct CliOptions {
     double entropyDeltaDown = 0.015;
     double entropyHysteresis = 0.004;
     int switchCooldownSec = 2;
+    double targetRms = 9000.0;
+    double limiterCeiling = 28000.0;
+    double limiterMaxGain = 1.8;
     unsigned int seed = 0;
     bool verbose = true;
     bool listAlgorithms = false;
@@ -165,6 +168,9 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --entropy-delta-down <v>   порог падения энтропии RAM для switch (по умолчанию 0.015)\n"
         << "  --entropy-hysteresis <v>   hysteresis для entropy-switch (по умолчанию 0.004)\n"
         << "  --switch-cooldown <sec>    cooldown между switch-событиями (по умолчанию 2)\n"
+        << "  --target-rms <v>           целевой RMS мастера (по умолчанию 9000)\n"
+        << "  --limiter-ceiling <v>      ceiling мягкого лимитера (по умолчанию 28000)\n"
+        << "  --limiter-max-gain <v>     максимум makeup gain лимитера (по умолчанию 1.8)\n"
         << "  --list-algorithms          показать доступные алгоритмы\n"
         << "  --seed <num>               фиксировать seed (0 = случайный)\n"
         << "  --quiet                    отключить лог прогресса\n"
@@ -291,6 +297,21 @@ bool parseCli(int argc,
                 error = "Некорректное значение --switch-cooldown";
                 return false;
             }
+        } else if (isFlag(arg, "--target-rms")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.targetRms)) {
+                error = "Некорректное значение --target-rms";
+                return false;
+            }
+        } else if (isFlag(arg, "--limiter-ceiling")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.limiterCeiling)) {
+                error = "Некорректное значение --limiter-ceiling";
+                return false;
+            }
+        } else if (isFlag(arg, "--limiter-max-gain")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.limiterMaxGain)) {
+                error = "Некорректное значение --limiter-max-gain";
+                return false;
+            }
         } else if (isFlag(arg, "--min-voices")) {
             if (!requireValue(arg, value) || !parseInt(value, options.minVoices)) {
                 error = "Некорректное значение --min-voices";
@@ -394,6 +415,21 @@ bool parseCli(int argc,
         return false;
     }
 
+    if (options.targetRms <= 100.0 || options.targetRms > 20000.0) {
+        error = "--target-rms должен быть в диапазоне (100, 20000]";
+        return false;
+    }
+
+    if (options.limiterCeiling <= 1000.0 || options.limiterCeiling > 32767.0) {
+        error = "--limiter-ceiling должен быть в диапазоне (1000, 32767]";
+        return false;
+    }
+
+    if (options.limiterMaxGain < 0.25 || options.limiterMaxGain > 4.0) {
+        error = "--limiter-max-gain должен быть в диапазоне [0.25, 4.0]";
+        return false;
+    }
+
     return true;
 }
 
@@ -415,6 +451,9 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.entropyDeltaDown = options.entropyDeltaDown;
     config.entropyHysteresis = options.entropyHysteresis;
     config.switchCooldownSec = options.switchCooldownSec;
+    config.targetRms = options.targetRms;
+    config.limiterCeiling = options.limiterCeiling;
+    config.limiterMaxGain = options.limiterMaxGain;
     config.seed = options.seed;
     config.verbose = options.verbose;
     config.stopFlag = &gStopRequested;

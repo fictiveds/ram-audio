@@ -269,6 +269,48 @@ public:
     }
 };
 
+class AdaptiveBusLimiter final {
+public:
+    AdaptiveBusLimiter(double targetRms, double ceiling, double maxGain, int sampleRate)
+        : targetRms_(std::max(100.0, targetRms)),
+          ceiling_(std::clamp(ceiling, 1000.0, 32767.0)),
+          maxGain_(std::clamp(maxGain, 0.25, 4.0)),
+          minGain_(0.25),
+          sampleRate_(std::max(1, sampleRate)),
+          gain_(1.0),
+          rmsFallback_(targetRms_),
+          attackCoeff_(std::exp(-1.0 / (0.012 * static_cast<double>(sampleRate_)))),
+          releaseCoeff_(std::exp(-1.0 / (0.250 * static_cast<double>(sampleRate_)))) {}
+
+    double process(double sample, const TelemetryMetrics& telemetry) {
+        const double measuredRms = telemetry.valid && telemetry.rms > 1.0
+                                       ? telemetry.rms
+                                       : std::max(1.0, rmsFallback_);
+        const double targetGain = std::clamp(targetRms_ / measuredRms, minGain_, maxGain_);
+        const double coeff = targetGain < gain_ ? attackCoeff_ : releaseCoeff_;
+        gain_ = coeff * gain_ + (1.0 - coeff) * targetGain;
+
+        const double driven = sample * gain_;
+        rmsFallback_ = (rmsFallback_ * 0.999) + (std::fabs(driven) * 0.001);
+
+        if (ceiling_ <= 1.0) {
+            return driven;
+        }
+        return ceiling_ * std::tanh(driven / ceiling_);
+    }
+
+private:
+    double targetRms_;
+    double ceiling_;
+    double maxGain_;
+    double minGain_;
+    int sampleRate_;
+    double gain_;
+    double rmsFallback_;
+    double attackCoeff_;
+    double releaseCoeff_;
+};
+
 }  // namespace
 
 RamAudioEngine::SynthVoice::SynthVoice(std::unique_ptr<IRamAlgorithm> algorithm,
@@ -497,6 +539,10 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
     const double silenceEnergyThreshold = 18000.0;
     const int silenceRecoverySamples = std::max(1, config_.sampleRate / 3);
     AudioTelemetry telemetry(config_.sampleRate, 4096, 512);
+    AdaptiveBusLimiter busLimiter(config_.targetRms,
+                                  config_.limiterCeiling,
+                                  config_.limiterMaxGain,
+                                  config_.sampleRate);
 
     SceneState sceneState;
     sceneState.activePid = snapshot.pid;
@@ -659,7 +705,8 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
             }
         }
 
-        const std::int16_t sample = clampToInt16(smoothedSample);
+        const double limitedSample = busLimiter.process(smoothedSample, sceneState.telemetry);
+        const std::int16_t sample = clampToInt16(limitedSample);
         if (!sink.writeSample(sample)) {
             if (config_.stopFlag != nullptr && *config_.stopFlag != 0) {
                 break;

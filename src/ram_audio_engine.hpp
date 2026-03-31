@@ -83,6 +83,9 @@ struct EngineConfig {
     double entropyDeltaDown = 0.015;
     double entropyHysteresis = 0.004;
     int switchCooldownSec = 2;
+    double targetRms = 9000.0;
+    double limiterCeiling = 28000.0;
+    double limiterMaxGain = 1.8;
     unsigned int seed = 0;
     bool verbose = true;
     const volatile std::sig_atomic_t* stopFlag = nullptr;
