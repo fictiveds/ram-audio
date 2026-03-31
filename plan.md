@@ -169,7 +169,7 @@
   - Частоты раздела плавно модулируются, без zipper noise.
   - Можно закрепить voice family за полосой (опционально).
 
-#### [ ] T4.2 Implement `modulation_matrix`
+#### [x] T4.2 Implement `modulation_matrix`
 - Description: матрица модуляций между голосами/шинами (AM/FM/ring/wavefold depth).
 - DoD:
   - Есть N x N routing с ограничением глубины модуляции.

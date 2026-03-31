@@ -873,6 +873,97 @@ private:
     double lfoPhase_;
 };
 
+class ModulationMatrix final {
+public:
+    ModulationMatrix(bool enabled,
+                     double depth,
+                     double feedbackLimit,
+                     double wavefoldDepth)
+        : enabled_(enabled),
+          depth_(std::clamp(depth, 0.0, 1.0)),
+          feedbackLimit_(std::clamp(feedbackLimit, 0.0, 0.95)),
+          wavefoldDepth_(std::clamp(wavefoldDepth, 0.0, 1.0)),
+          feedbackState_(0.0) {}
+
+    std::vector<double> process(const std::vector<VoiceDescriptor>& voices,
+                                const std::vector<double>& in) {
+        if (!enabled_ || in.empty()) {
+            return in;
+        }
+
+        const std::size_t n = in.size();
+        std::vector<double> out(n, 0.0);
+        for (std::size_t i = 0; i < n; ++i) {
+            const double carrier = in[i];
+            double mod = 0.0;
+            for (std::size_t j = 0; j < n; ++j) {
+                if (j == i) {
+                    continue;
+                }
+
+                const double route = routeWeight(voices, i, j);
+                mod += in[j] * route;
+            }
+
+            const double am = carrier * (1.0 + depth_ * std::tanh(mod * 0.2));
+            const double ring = carrier + (depth_ * 0.6) * (carrier * std::tanh(mod));
+            const double mixed = 0.55 * am + 0.45 * ring;
+            out[i] = wavefold(mixed, wavefoldDepth_ * (0.2 + depth_ * 0.8));
+        }
+
+        double sum = 0.0;
+        for (double v : out) {
+            sum += v;
+        }
+        const double mono = sum / static_cast<double>(n);
+
+        feedbackState_ = std::clamp((feedbackState_ * 0.97) + mono * (depth_ * 0.03),
+                                    -feedbackLimit_, feedbackLimit_);
+
+        for (double& v : out) {
+            v = std::clamp(v + feedbackState_ * 0.3, -32000.0, 32000.0);
+        }
+
+        return out;
+    }
+
+private:
+    static double idHashWeight(const std::string& id) {
+        std::uint32_t h = 2166136261u;
+        for (char c : id) {
+            h ^= static_cast<std::uint8_t>(c);
+            h *= 16777619u;
+        }
+        return 0.5 + (static_cast<double>(h % 1000u) / 1000.0);
+    }
+
+    double routeWeight(const std::vector<VoiceDescriptor>& voices,
+                       std::size_t i,
+                       std::size_t j) const {
+        double w = 1.0;
+        if (i < voices.size() && j < voices.size()) {
+            const double ai = idHashWeight(voices[i].algorithmId);
+            const double aj = idHashWeight(voices[j].algorithmId);
+            w = 0.2 + 0.8 * std::fabs(ai - aj);
+        }
+        return std::clamp(w * depth_, 0.0, feedbackLimit_);
+    }
+
+    static double wavefold(double x, double amount) {
+        if (amount <= 0.0) {
+            return x;
+        }
+        const double k = 1.0 + amount * 3.5;
+        return std::tanh(x * k) / k + std::sin(x * k * 0.5) * amount * 0.15;
+    }
+
+    bool enabled_;
+    double depth_;
+    double feedbackLimit_;
+    double wavefoldDepth_;
+    double feedbackState_;
+};
+
 }  // namespace
 
 RamAudioEngine::SynthVoice::SynthVoice(std::unique_ptr<IRamAlgorithm> algorithm,
@@ -1240,6 +1331,10 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                              config_.bandSplitHighHz,
                              config_.bandSplitDriftHz,
                              config_.bandPinFamilies);
+    ModulationMatrix modMatrix(config_.modulationMatrixEnable,
+                               config_.modulationMatrixDepth,
+                               config_.modulationFeedbackLimit,
+                               config_.modulationWavefoldDepth);
 
     const int crossfadeSamples = std::max(
         0,
@@ -1404,8 +1499,9 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
             createVoice(false);
         }
 
-        smoothedSample = mixPolicy_->mix(sceneState, voiceDescriptors, voiceSamples, smoothedSample);
-        smoothedSample = bandMixer.process(sceneState, voiceDescriptors, voiceSamples);
+        std::vector<double> modulatedSamples = modMatrix.process(voiceDescriptors, voiceSamples);
+        smoothedSample = mixPolicy_->mix(sceneState, voiceDescriptors, modulatedSamples, smoothedSample);
+        smoothedSample = bandMixer.process(sceneState, voiceDescriptors, modulatedSamples);
         if (!std::isfinite(smoothedSample)) {
             smoothedSample = 0.0;
         }

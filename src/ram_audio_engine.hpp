@@ -87,6 +87,10 @@ struct EngineConfig {
     double geneticMutationRate = 0.28;
     double geneticMutationDepth = 0.35;
     double geneticAlgorithmMutation = 0.18;
+    bool modulationMatrixEnable = false;
+    double modulationMatrixDepth = 0.22;
+    double modulationFeedbackLimit = 0.55;
+    double modulationWavefoldDepth = 0.18;
     double entropyDeltaUp = 0.015;
     double entropyDeltaDown = 0.015;
     double entropyHysteresis = 0.004;

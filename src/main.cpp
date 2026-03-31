@@ -35,6 +35,10 @@ struct CliOptions {
     double geneticMutationRate = 0.28;
     double geneticMutationDepth = 0.35;
     double geneticAlgorithmMutation = 0.18;
+    bool modulationMatrixEnable = false;
+    double modulationMatrixDepth = 0.22;
+    double modulationFeedbackLimit = 0.55;
+    double modulationWavefoldDepth = 0.18;
     std::string switchMode = "timer";
     std::string mixMode = "smoothed";
     double entropyDeltaUp = 0.015;
@@ -196,6 +200,10 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --genetic-mutation-rate <v> вероятность мутации при genetic spawn [0..1]\n"
         << "  --genetic-mutation-depth <v> глубина мутации параметров [0..1]\n"
         << "  --genetic-algo-mutation <v> вероятность смены алгоритма при genetic spawn [0..1]\n"
+        << "  --mod-matrix-enable        включить modulation matrix\n"
+        << "  --mod-matrix-depth <v>     глубина modulation matrix [0..1]\n"
+        << "  --mod-feedback-limit <v>   ограничение feedback в modulation matrix [0..0.95]\n"
+        << "  --mod-wavefold <v>         глубина wavefold в modulation matrix [0..1]\n"
         << "  --switch-mode <mode>       режим переключения сцен (timer|entropy-triggered)\n"
         << "  --mix-mode <mode>          режим микширования (smoothed)\n"
         << "  --entropy-delta-up <v>     порог роста энтропии RAM для switch (по умолчанию 0.015)\n"
@@ -354,6 +362,23 @@ bool parseCli(int argc,
         } else if (isFlag(arg, "--genetic-algo-mutation")) {
             if (!requireValue(arg, value) || !parseDouble(value, options.geneticAlgorithmMutation)) {
                 error = "Некорректное значение --genetic-algo-mutation";
+                return false;
+            }
+        } else if (isFlag(arg, "--mod-matrix-enable")) {
+            options.modulationMatrixEnable = true;
+        } else if (isFlag(arg, "--mod-matrix-depth")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.modulationMatrixDepth)) {
+                error = "Некорректное значение --mod-matrix-depth";
+                return false;
+            }
+        } else if (isFlag(arg, "--mod-feedback-limit")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.modulationFeedbackLimit)) {
+                error = "Некорректное значение --mod-feedback-limit";
+                return false;
+            }
+        } else if (isFlag(arg, "--mod-wavefold")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.modulationWavefoldDepth)) {
+                error = "Некорректное значение --mod-wavefold";
                 return false;
             }
         } else if (isFlag(arg, "--switch-mode")) {
@@ -609,6 +634,21 @@ bool parseCli(int argc,
         return false;
     }
 
+    if (options.modulationMatrixDepth < 0.0 || options.modulationMatrixDepth > 1.0) {
+        error = "--mod-matrix-depth должен быть в диапазоне [0, 1]";
+        return false;
+    }
+
+    if (options.modulationFeedbackLimit < 0.0 || options.modulationFeedbackLimit > 0.95) {
+        error = "--mod-feedback-limit должен быть в диапазоне [0, 0.95]";
+        return false;
+    }
+
+    if (options.modulationWavefoldDepth < 0.0 || options.modulationWavefoldDepth > 1.0) {
+        error = "--mod-wavefold должен быть в диапазоне [0, 1]";
+        return false;
+    }
+
     if (options.switchMode != "timer" && options.switchMode != "entropy-triggered") {
         error = "Некорректный --switch-mode: " + options.switchMode +
                 " (поддерживается: timer|entropy-triggered)";
@@ -770,6 +810,10 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.geneticMutationRate = options.geneticMutationRate;
     config.geneticMutationDepth = options.geneticMutationDepth;
     config.geneticAlgorithmMutation = options.geneticAlgorithmMutation;
+    config.modulationMatrixEnable = options.modulationMatrixEnable;
+    config.modulationMatrixDepth = options.modulationMatrixDepth;
+    config.modulationFeedbackLimit = options.modulationFeedbackLimit;
+    config.modulationWavefoldDepth = options.modulationWavefoldDepth;
     config.switchMode = options.switchMode;
     config.mixMode = options.mixMode;
     config.entropyDeltaUp = options.entropyDeltaUp;
@@ -888,6 +932,10 @@ int main(int argc, char** argv) {
         }
         std::cerr << "Switch mode: " << options.switchMode
                   << ", Mix mode: " << options.mixMode << std::endl;
+        std::cerr << "Mod matrix: " << (options.modulationMatrixEnable ? "on" : "off")
+                  << " depth=" << options.modulationMatrixDepth
+                  << " feedback=" << options.modulationFeedbackLimit
+                  << " wavefold=" << options.modulationWavefoldDepth << std::endl;
         if (options.switchMode == "entropy-triggered") {
             std::cerr << "Entropy switch config: up=" << options.entropyDeltaUp
                       << ", down=" << options.entropyDeltaDown
