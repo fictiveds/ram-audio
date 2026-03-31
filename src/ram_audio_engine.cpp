@@ -1,6 +1,7 @@
 #include "ram_audio_engine.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -93,6 +94,34 @@ bool isAllZero(const std::uint8_t* data, std::size_t size) {
     return true;
 }
 
+double normalizedShannonEntropy(const std::vector<std::uint8_t>& bytes) {
+    if (bytes.empty()) {
+        return 0.0;
+    }
+
+    std::array<std::uint64_t, 256> histogram{};
+    for (std::uint8_t b : bytes) {
+        ++histogram[static_cast<std::size_t>(b)];
+    }
+
+    const double total = static_cast<double>(bytes.size());
+    if (total <= 0.0) {
+        return 0.0;
+    }
+
+    double entropy = 0.0;
+    for (std::uint64_t count : histogram) {
+        if (count == 0) {
+            continue;
+        }
+        const double p = static_cast<double>(count) / total;
+        entropy -= p * std::log2(p);
+    }
+
+    constexpr double kMaxEntropy = 8.0;
+    return std::clamp(entropy / kMaxEntropy, 0.0, 1.0);
+}
+
 class TimerSwitchPolicy final : public ISwitchPolicy {
 public:
     explicit TimerSwitchPolicy(std::mt19937& rng)
@@ -103,7 +132,10 @@ public:
                           int minVoices,
                           int maxVoices,
                           std::uint64_t memorySwitchTimer,
-                          std::uint64_t voiceSpawnTimer) override {
+                          std::uint64_t voiceSpawnTimer,
+                          bool /*hasSwitchCandidate*/,
+                          int /*candidatePid*/,
+                          double /*candidateEntropy*/) override {
         SwitchDecision decision;
         decision.switchMemorySource = (memorySwitchTimer == 0);
 
@@ -119,6 +151,104 @@ public:
 
 private:
     std::mt19937& rng_;
+};
+
+class EntropyTriggeredSwitchPolicy final : public ISwitchPolicy {
+public:
+    EntropyTriggeredSwitchPolicy(std::mt19937& rng,
+                                 double entropyDeltaUp,
+                                 double entropyDeltaDown,
+                                 double entropyHysteresis,
+                                 int switchCooldownSec,
+                                 int sampleRate)
+        : rng_(rng),
+          entropyDeltaUp_(std::max(1e-6, entropyDeltaUp)),
+          entropyDeltaDown_(std::max(1e-6, entropyDeltaDown)),
+          entropyHysteresis_(std::max(0.0, entropyHysteresis)),
+          switchCooldownSamples_(std::max(0, switchCooldownSec * std::max(1, sampleRate))),
+          lastSwitchSample_(0),
+          hasLastSwitch_(false),
+          highLatched_(false),
+          lowLatched_(false) {}
+
+    SwitchDecision decide(const SceneState& scene,
+                          std::size_t activeVoices,
+                          int minVoices,
+                          int maxVoices,
+                          std::uint64_t memorySwitchTimer,
+                          std::uint64_t voiceSpawnTimer,
+                          bool hasSwitchCandidate,
+                          int candidatePid,
+                          double candidateEntropy) override {
+        SwitchDecision decision;
+
+        if (voiceSpawnTimer == 0) {
+            const int minTarget = std::max(1, minVoices);
+            const int maxTarget = std::max(minTarget, maxVoices);
+            decision.targetVoices = randomIntInclusive(rng_, minTarget, maxTarget);
+            decision.spawnVoice = static_cast<int>(activeVoices) < decision.targetVoices;
+        }
+
+        if (!hasSwitchCandidate || candidatePid < 0) {
+            return decision;
+        }
+
+        if (candidatePid == scene.activePid) {
+            return decision;
+        }
+
+        if (memorySwitchTimer != 0) {
+            return decision;
+        }
+
+        if (hasLastSwitch_) {
+            const std::uint64_t sinceLast = scene.sampleIndex - lastSwitchSample_;
+            if (sinceLast < static_cast<std::uint64_t>(switchCooldownSamples_)) {
+                return decision;
+            }
+        }
+
+        const double delta = candidateEntropy - scene.memoryEntropy;
+        const double highThreshold = entropyDeltaUp_;
+        const double lowThreshold = -entropyDeltaDown_;
+        const bool highEvent = delta >= highThreshold;
+        const bool lowEvent = delta <= lowThreshold;
+
+        if (!highLatched_ && highEvent) {
+            decision.switchMemorySource = true;
+            highLatched_ = true;
+            lowLatched_ = false;
+        } else if (!lowLatched_ && lowEvent) {
+            decision.switchMemorySource = true;
+            lowLatched_ = true;
+            highLatched_ = false;
+        }
+
+        if (highLatched_ && delta <= (highThreshold - entropyHysteresis_)) {
+            highLatched_ = false;
+        }
+        if (lowLatched_ && delta >= (lowThreshold + entropyHysteresis_)) {
+            lowLatched_ = false;
+        }
+
+        if (decision.switchMemorySource) {
+            lastSwitchSample_ = scene.sampleIndex;
+            hasLastSwitch_ = true;
+        }
+
+        return decision;
+    }
+
+private:
+    std::mt19937& rng_;
+    double entropyDeltaUp_;
+    double entropyDeltaDown_;
+    double entropyHysteresis_;
+    int switchCooldownSamples_;
+    std::uint64_t lastSwitchSample_;
+    bool hasLastSwitch_;
+    bool highLatched_;
+    bool lowLatched_;
 };
 
 class SmoothedAverageMixPolicy final : public IMixPolicy {
@@ -228,7 +358,17 @@ RamAudioEngine::RamAudioEngine(EngineConfig config, AlgorithmRegistry registry)
       switchPolicy_(config_.switchPolicy),
       mixPolicy_(config_.mixPolicy) {
     if (!switchPolicy_) {
-        switchPolicy_ = std::make_shared<TimerSwitchPolicy>(rng_);
+        if (config_.switchMode == "entropy-triggered") {
+            switchPolicy_ = std::make_shared<EntropyTriggeredSwitchPolicy>(
+                rng_,
+                config_.entropyDeltaUp,
+                config_.entropyDeltaDown,
+                config_.entropyHysteresis,
+                config_.switchCooldownSec,
+                config_.sampleRate);
+        } else {
+            switchPolicy_ = std::make_shared<TimerSwitchPolicy>(rng_);
+        }
     }
     if (!mixPolicy_) {
         mixPolicy_ = std::make_shared<SmoothedAverageMixPolicy>();
@@ -264,6 +404,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
     stats.memorySizeBytes = snapshot.bytes.size();
     stats.pid = snapshot.pid;
     stats.processName = snapshot.processName;
+    double memoryEntropy = normalizedShannonEntropy(snapshot.bytes);
 
     if (config_.verbose) {
         std::cerr << "[+] Подключено к процессу: " << snapshot.processName
@@ -360,6 +501,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
     SceneState sceneState;
     sceneState.activePid = snapshot.pid;
     sceneState.activeProcessName = snapshot.processName;
+    sceneState.memoryEntropy = memoryEntropy;
 
     const std::uint64_t totalSamples = config_.infinite
                                            ? std::numeric_limits<std::uint64_t>::max()
@@ -376,6 +518,21 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         sceneState.macroMod = macroMod;
         sceneState.activePid = snapshot.pid;
         sceneState.activeProcessName = snapshot.processName;
+        sceneState.memoryEntropy = memoryEntropy;
+
+        MemorySnapshot switchCandidate;
+        bool hasSwitchCandidate = false;
+        int candidatePid = -1;
+        double candidateEntropy = memoryEntropy;
+        std::string switchCandidateError;
+        if (pidTimer == 0) {
+            switchCandidate = getRandomProcessMemory(switchCandidateError);
+            if (!switchCandidate.bytes.empty()) {
+                hasSwitchCandidate = true;
+                candidatePid = switchCandidate.pid;
+                candidateEntropy = normalizedShannonEntropy(switchCandidate.bytes);
+            }
+        }
 
         const SwitchDecision decision = switchPolicy_->decide(
             sceneState,
@@ -383,13 +540,16 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
             config_.minVoices,
             config_.maxVoices,
             pidTimer,
-            nextVoiceTime);
+            nextVoiceTime,
+            hasSwitchCandidate,
+            candidatePid,
+            candidateEntropy);
 
         if (decision.switchMemorySource) {
-            std::string switchErr;
-            MemorySnapshot newSnapshot = getRandomProcessMemory(switchErr);
-            if (!newSnapshot.bytes.empty()) {
-                snapshot = std::move(newSnapshot);
+            if (hasSwitchCandidate) {
+                const double prevEntropy = memoryEntropy;
+                snapshot = std::move(switchCandidate);
+                memoryEntropy = candidateEntropy;
                 stats.memorySizeBytes = snapshot.bytes.size();
                 stats.pid = snapshot.pid;
                 stats.processName = snapshot.processName;
@@ -405,11 +565,16 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                               << " (PID: " << snapshot.pid << "), "
                               << std::fixed << std::setprecision(2)
                               << (static_cast<double>(snapshot.bytes.size()) / 1024.0 / 1024.0)
-                              << " MB" << std::endl;
+                              << " MB"
+                              << ", entropy " << std::setprecision(4) << prevEntropy
+                              << " -> " << memoryEntropy << std::endl;
                 }
-            } else if (config_.verbose && !switchErr.empty()) {
-                std::cerr << "\n[!] Смена процесса пропущена: " << switchErr << std::endl;
+            } else if (config_.verbose && !switchCandidateError.empty()) {
+                std::cerr << "\n[!] Смена процесса пропущена: " << switchCandidateError << std::endl;
             }
+        }
+
+        if (pidTimer == 0) {
             pidTimer = schedulePidSwitchTimer();
         }
         if (pidTimer > 0) {

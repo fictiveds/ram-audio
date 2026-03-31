@@ -33,6 +33,7 @@ struct SceneState {
     int activePid = -1;
     std::string activeProcessName;
     double macroMod = 0.0;
+    double memoryEntropy = 0.0;
     TelemetryMetrics telemetry;
 };
 
@@ -51,7 +52,10 @@ public:
                                   int minVoices,
                                   int maxVoices,
                                   std::uint64_t memorySwitchTimer,
-                                  std::uint64_t voiceSpawnTimer) = 0;
+                                  std::uint64_t voiceSpawnTimer,
+                                  bool hasSwitchCandidate,
+                                  int candidatePid,
+                                  double candidateEntropy) = 0;
 };
 
 class IMixPolicy {
@@ -75,6 +79,10 @@ struct EngineConfig {
     int memorySwitchMaxSec = 40;
     int voiceSpawnMinSec = 2;
     int voiceSpawnMaxSec = 8;
+    double entropyDeltaUp = 0.015;
+    double entropyDeltaDown = 0.015;
+    double entropyHysteresis = 0.004;
+    int switchCooldownSec = 2;
     unsigned int seed = 0;
     bool verbose = true;
     const volatile std::sig_atomic_t* stopFlag = nullptr;

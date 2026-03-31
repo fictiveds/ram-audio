@@ -30,6 +30,10 @@ struct CliOptions {
     int voiceSpawnMaxSec = 8;
     std::string switchMode = "timer";
     std::string mixMode = "smoothed";
+    double entropyDeltaUp = 0.015;
+    double entropyDeltaDown = 0.015;
+    double entropyHysteresis = 0.004;
+    int switchCooldownSec = 2;
     unsigned int seed = 0;
     bool verbose = true;
     bool listAlgorithms = false;
@@ -44,6 +48,20 @@ bool parseInt(const std::string& value, int& out) {
     try {
         std::size_t pos = 0;
         int parsed = std::stoi(value, &pos, 10);
+        if (pos != value.size()) {
+            return false;
+        }
+        out = parsed;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parseDouble(const std::string& value, double& out) {
+    try {
+        std::size_t pos = 0;
+        double parsed = std::stod(value, &pos);
         if (pos != value.size()) {
             return false;
         }
@@ -141,8 +159,12 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --buffer-ms <ms>           буфер вывода для stream, 0=без буфера (по умолчанию 500)\n"
         << "  --max-memory-mb <mb>       лимит считанной памяти процесса (по умолчанию 60)\n"
         << "  --algorithms <a,b,c>       список ID алгоритмов для выбора\n"
-        << "  --switch-mode <mode>       режим переключения сцен (timer)\n"
+        << "  --switch-mode <mode>       режим переключения сцен (timer|entropy-triggered)\n"
         << "  --mix-mode <mode>          режим микширования (smoothed)\n"
+        << "  --entropy-delta-up <v>     порог роста энтропии RAM для switch (по умолчанию 0.015)\n"
+        << "  --entropy-delta-down <v>   порог падения энтропии RAM для switch (по умолчанию 0.015)\n"
+        << "  --entropy-hysteresis <v>   hysteresis для entropy-switch (по умолчанию 0.004)\n"
+        << "  --switch-cooldown <sec>    cooldown между switch-событиями (по умолчанию 2)\n"
         << "  --list-algorithms          показать доступные алгоритмы\n"
         << "  --seed <num>               фиксировать seed (0 = случайный)\n"
         << "  --quiet                    отключить лог прогресса\n"
@@ -249,6 +271,26 @@ bool parseCli(int argc,
                 return false;
             }
             options.mixMode = value;
+        } else if (isFlag(arg, "--entropy-delta-up")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.entropyDeltaUp)) {
+                error = "Некорректное значение --entropy-delta-up";
+                return false;
+            }
+        } else if (isFlag(arg, "--entropy-delta-down")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.entropyDeltaDown)) {
+                error = "Некорректное значение --entropy-delta-down";
+                return false;
+            }
+        } else if (isFlag(arg, "--entropy-hysteresis")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.entropyHysteresis)) {
+                error = "Некорректное значение --entropy-hysteresis";
+                return false;
+            }
+        } else if (isFlag(arg, "--switch-cooldown")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.switchCooldownSec)) {
+                error = "Некорректное значение --switch-cooldown";
+                return false;
+            }
         } else if (isFlag(arg, "--min-voices")) {
             if (!requireValue(arg, value) || !parseInt(value, options.minVoices)) {
                 error = "Некорректное значение --min-voices";
@@ -321,13 +363,34 @@ bool parseCli(int argc,
         }
     }
 
-    if (options.switchMode != "timer") {
-        error = "Некорректный --switch-mode: " + options.switchMode + " (поддерживается: timer)";
+    if (options.switchMode != "timer" && options.switchMode != "entropy-triggered") {
+        error = "Некорректный --switch-mode: " + options.switchMode +
+                " (поддерживается: timer|entropy-triggered)";
         return false;
     }
 
     if (options.mixMode != "smoothed") {
         error = "Некорректный --mix-mode: " + options.mixMode + " (поддерживается: smoothed)";
+        return false;
+    }
+
+    if (options.entropyDeltaUp <= 0.0 || options.entropyDeltaUp >= 1.0) {
+        error = "--entropy-delta-up должен быть в диапазоне (0, 1)";
+        return false;
+    }
+
+    if (options.entropyDeltaDown <= 0.0 || options.entropyDeltaDown >= 1.0) {
+        error = "--entropy-delta-down должен быть в диапазоне (0, 1)";
+        return false;
+    }
+
+    if (options.entropyHysteresis < 0.0 || options.entropyHysteresis >= 0.25) {
+        error = "--entropy-hysteresis должен быть в диапазоне [0, 0.25)";
+        return false;
+    }
+
+    if (options.switchCooldownSec < 0) {
+        error = "--switch-cooldown должен быть >= 0";
         return false;
     }
 
@@ -348,6 +411,10 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.voiceSpawnMaxSec = options.voiceSpawnMaxSec;
     config.switchMode = options.switchMode;
     config.mixMode = options.mixMode;
+    config.entropyDeltaUp = options.entropyDeltaUp;
+    config.entropyDeltaDown = options.entropyDeltaDown;
+    config.entropyHysteresis = options.entropyHysteresis;
+    config.switchCooldownSec = options.switchCooldownSec;
     config.seed = options.seed;
     config.verbose = options.verbose;
     config.stopFlag = &gStopRequested;
@@ -437,6 +504,12 @@ int main(int argc, char** argv) {
         }
         std::cerr << "Switch mode: " << options.switchMode
                   << ", Mix mode: " << options.mixMode << std::endl;
+        if (options.switchMode == "entropy-triggered") {
+            std::cerr << "Entropy switch config: up=" << options.entropyDeltaUp
+                      << ", down=" << options.entropyDeltaDown
+                      << ", hysteresis=" << options.entropyHysteresis
+                      << ", cooldown=" << options.switchCooldownSec << "s" << std::endl;
+        }
         if (options.infinite) {
             std::cerr << "Остановка: Ctrl+C" << std::endl;
         }
