@@ -591,6 +591,98 @@ private:
     bool initialized_;
 };
 
+class SceneConductor final {
+public:
+    struct Profile {
+        double density = 0.5;
+        double spectralTilt = 0.0;
+    };
+
+    SceneConductor(int sampleRate,
+                   int macroMinSec,
+                   int macroMaxSec,
+                   int microMinMs,
+                   int microMaxMs,
+                   std::mt19937& rng)
+        : sampleRate_(std::max(1, sampleRate)),
+          macroMinSamples_(std::max(1, macroMinSec * std::max(1, sampleRate_))),
+          macroMaxSamples_(std::max(macroMinSamples_, macroMaxSec * std::max(1, sampleRate_))),
+          microMinSamples_(std::max(1, (microMinMs * std::max(1, sampleRate_)) / 1000)),
+          microMaxSamples_(std::max(microMinSamples_, (microMaxMs * std::max(1, sampleRate_)) / 1000)),
+          nextMacroAt_(0),
+          nextMicroAt_(0),
+          profile_(),
+          rng_(rng) {
+        scheduleMacro(0);
+        scheduleMicro(0);
+    }
+
+    bool maybeAdvance(std::uint64_t sampleIndex, SceneState& scene, bool verbose) {
+        bool changed = false;
+
+        if (sampleIndex >= nextMacroAt_) {
+            scene.sceneIndex += 1;
+            scene.sceneStartSample = sampleIndex;
+            randomizeMacroProfile();
+            scheduleMacro(sampleIndex);
+            changed = true;
+
+            if (verbose) {
+                std::cerr << "\n[+] SceneConductor macro-scene=" << scene.sceneIndex
+                          << " density=" << std::fixed << std::setprecision(2) << profile_.density
+                          << " tilt=" << std::fixed << std::setprecision(2) << profile_.spectralTilt
+                          << std::endl;
+            }
+        }
+
+        if (sampleIndex >= nextMicroAt_) {
+            randomizeMicroNudge();
+            scheduleMicro(sampleIndex);
+            changed = true;
+        }
+
+        scene.macroMod = std::clamp(scene.macroMod * (0.55 + profile_.density * 0.9), 0.0, 1.0);
+        return changed;
+    }
+
+    const Profile& profile() const {
+        return profile_;
+    }
+
+private:
+    void scheduleMacro(std::uint64_t now) {
+        std::uniform_int_distribution<int> dist(macroMinSamples_, macroMaxSamples_);
+        nextMacroAt_ = now + static_cast<std::uint64_t>(dist(rng_));
+    }
+
+    void scheduleMicro(std::uint64_t now) {
+        std::uniform_int_distribution<int> dist(microMinSamples_, microMaxSamples_);
+        nextMicroAt_ = now + static_cast<std::uint64_t>(dist(rng_));
+    }
+
+    void randomizeMacroProfile() {
+        std::uniform_real_distribution<double> d(0.15, 1.0);
+        std::uniform_real_distribution<double> t(-0.5, 0.5);
+        profile_.density = d(rng_);
+        profile_.spectralTilt = t(rng_);
+    }
+
+    void randomizeMicroNudge() {
+        std::uniform_real_distribution<double> n(-0.06, 0.06);
+        profile_.density = std::clamp(profile_.density + n(rng_), 0.10, 1.0);
+    }
+
+    int sampleRate_;
+    int macroMinSamples_;
+    int macroMaxSamples_;
+    int microMinSamples_;
+    int microMaxSamples_;
+    std::uint64_t nextMacroAt_;
+    std::uint64_t nextMicroAt_;
+    Profile profile_;
+    std::mt19937& rng_;
+};
+
 }  // namespace
 
 RamAudioEngine::SynthVoice::SynthVoice(std::unique_ptr<IRamAlgorithm> algorithm,
@@ -749,6 +841,12 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
 
     std::vector<SynthVoice> voices;
     HmmWithTabuSelector hmmSelector(config_.hmmTabuWindow, config_.hmmNoveltyBias);
+    SceneConductor conductor(config_.sampleRate,
+                             config_.sceneMacroMinSec,
+                             config_.sceneMacroMaxSec,
+                             config_.sceneMicroMinMs,
+                             config_.sceneMicroMaxMs,
+                             rng_);
 
     auto isAllowed = [&](const std::string& id) {
         if (config_.allowedAlgorithmIds.empty()) {
@@ -882,6 +980,14 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         sceneState.activeProcessName = snapshot.processName;
         sceneState.memoryEntropy = memoryEntropy;
 
+        const bool sceneChanged = conductor.maybeAdvance(i, sceneState, config_.verbose);
+        if (sceneChanged && sceneState.sceneStartSample == i && config_.verbose) {
+            std::cerr << "[>] Scene event sample=" << i
+                      << " pid=" << sceneState.activePid
+                      << " process=" << sceneState.activeProcessName
+                      << std::endl;
+        }
+
         MemorySnapshot switchCandidate;
         bool hasSwitchCandidate = false;
         int candidatePid = -1;
@@ -960,7 +1066,11 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                                          : std::max(
                                                std::max(1, config_.minVoices),
                                                static_cast<int>(voices.size()) + 1);
-            if (static_cast<int>(voices.size()) < targetVoices) {
+            const double sceneDensity = conductor.profile().density;
+            const int adaptiveTarget = std::max(
+                std::max(1, config_.minVoices),
+                static_cast<int>(std::round(static_cast<double>(targetVoices) * (0.6 + sceneDensity * 0.8))));
+            if (static_cast<int>(voices.size()) < adaptiveTarget) {
                 createVoice(false);
             }
         }

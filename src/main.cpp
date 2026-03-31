@@ -34,6 +34,10 @@ struct CliOptions {
     double entropyDeltaDown = 0.015;
     double entropyHysteresis = 0.004;
     int switchCooldownSec = 2;
+    int sceneMacroMinSec = 30;
+    int sceneMacroMaxSec = 180;
+    int sceneMicroMinMs = 300;
+    int sceneMicroMaxMs = 4000;
     double targetRms = 9000.0;
     double limiterCeiling = 28000.0;
     double limiterMaxGain = 1.8;
@@ -180,6 +184,10 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --entropy-delta-down <v>   порог падения энтропии RAM для switch (по умолчанию 0.015)\n"
         << "  --entropy-hysteresis <v>   hysteresis для entropy-switch (по умолчанию 0.004)\n"
         << "  --switch-cooldown <sec>    cooldown между switch-событиями (по умолчанию 2)\n"
+        << "  --scene-macro-min <sec>    min длительность macro-сцены (по умолчанию 30)\n"
+        << "  --scene-macro-max <sec>    max длительность macro-сцены (по умолчанию 180)\n"
+        << "  --scene-micro-min <ms>     min длительность micro-фазы (по умолчанию 300)\n"
+        << "  --scene-micro-max <ms>     max длительность micro-фазы (по умолчанию 4000)\n"
         << "  --target-rms <v>           целевой RMS мастера (по умолчанию 9000)\n"
         << "  --limiter-ceiling <v>      ceiling мягкого лимитера (по умолчанию 28000)\n"
         << "  --limiter-max-gain <v>     максимум makeup gain лимитера (по умолчанию 1.8)\n"
@@ -319,6 +327,26 @@ bool parseCli(int argc,
         } else if (isFlag(arg, "--switch-cooldown")) {
             if (!requireValue(arg, value) || !parseInt(value, options.switchCooldownSec)) {
                 error = "Некорректное значение --switch-cooldown";
+                return false;
+            }
+        } else if (isFlag(arg, "--scene-macro-min")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.sceneMacroMinSec)) {
+                error = "Некорректное значение --scene-macro-min";
+                return false;
+            }
+        } else if (isFlag(arg, "--scene-macro-max")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.sceneMacroMaxSec)) {
+                error = "Некорректное значение --scene-macro-max";
+                return false;
+            }
+        } else if (isFlag(arg, "--scene-micro-min")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.sceneMicroMinMs)) {
+                error = "Некорректное значение --scene-micro-min";
+                return false;
+            }
+        } else if (isFlag(arg, "--scene-micro-max")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.sceneMicroMaxMs)) {
+                error = "Некорректное значение --scene-micro-max";
                 return false;
             }
         } else if (isFlag(arg, "--target-rms")) {
@@ -499,6 +527,18 @@ bool parseCli(int argc,
         return false;
     }
 
+    if (options.sceneMacroMinSec <= 0 || options.sceneMacroMaxSec <= 0 ||
+        options.sceneMacroMinSec > options.sceneMacroMaxSec) {
+        error = "Диапазон --scene-macro-min/--scene-macro-max некорректен";
+        return false;
+    }
+
+    if (options.sceneMicroMinMs <= 0 || options.sceneMicroMaxMs <= 0 ||
+        options.sceneMicroMinMs > options.sceneMicroMaxMs) {
+        error = "Диапазон --scene-micro-min/--scene-micro-max некорректен";
+        return false;
+    }
+
     if (options.targetRms <= 100.0 || options.targetRms > 20000.0) {
         error = "--target-rms должен быть в диапазоне (100, 20000]";
         return false;
@@ -596,6 +636,10 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.entropyDeltaDown = options.entropyDeltaDown;
     config.entropyHysteresis = options.entropyHysteresis;
     config.switchCooldownSec = options.switchCooldownSec;
+    config.sceneMacroMinSec = options.sceneMacroMinSec;
+    config.sceneMacroMaxSec = options.sceneMacroMaxSec;
+    config.sceneMicroMinMs = options.sceneMicroMinMs;
+    config.sceneMicroMaxMs = options.sceneMicroMaxMs;
     config.targetRms = options.targetRms;
     config.limiterCeiling = options.limiterCeiling;
     config.limiterMaxGain = options.limiterMaxGain;
