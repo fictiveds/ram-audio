@@ -15,6 +15,7 @@ add_executable(ram_audio
     src/algorithms/texture_algorithms.cpp
     src/algorithms/advanced_algorithms.cpp
     src/algorithms/musical_algorithms.cpp
+    src/algorithms/experimental_algorithms.cpp
     src/telemetry.cpp
     src/ram_audio_engine.cpp
     src/audio_io.cpp

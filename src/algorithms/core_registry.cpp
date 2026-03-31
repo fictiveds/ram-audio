@@ -88,6 +88,7 @@ AlgorithmRegistry createDefaultAlgorithmRegistry() {
     ram_audio::registerTextureAlgorithms(registry);
     ram_audio::registerAdvancedAlgorithms(registry);
     ram_audio::registerMusicalAlgorithms(registry);
+    ram_audio::registerExperimentalAlgorithms(registry);
 
     return registry;
 }

@@ -70,14 +70,14 @@
 
 ### Epic E2 - New Sound Algorithms
 
-#### T2.1 Implement `ram_wavelet_scanner`
+#### [x] T2.1 Implement `ram_wavelet_scanner`
 - Description: wavelet-анализ окна RAM и озвучивание масштабов/деталей как слой осцилляторов.
 - DoD:
   - Есть минимум 3 уровня декомпозиции (low/mid/high detail).
   - Алгоритм корректно переживает смену размера memory snapshot.
   - На 60-сек рендере нет NaN/Inf/денормалов и фатальных клипов.
 
-#### T2.2 Implement `markov_byte_lattice`
+#### [x] T2.2 Implement `markov_byte_lattice`
 - Description: строить вероятностную модель переходов из байтовых окон и генерировать pitch/rhythm события.
 - DoD:
   - Реализована матрица переходов с нормализацией и smoothing.
