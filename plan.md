@@ -144,7 +144,7 @@
   - При превышении similarity threshold запускается recovery-стратегия (switch/spawn/mutation).
   - Частота ложных срабатываний ограничена и настраивается параметром.
 
-#### [ ] T3.5 Implement `genetic_voice_spawn`
+#### [x] T3.5 Implement `genetic_voice_spawn`
 - Description: новый голос наследует параметры 2 родительских голосов и мутирует.
 - DoD:
   - Реализованы crossover и bounded mutation для всех параметров голоса.

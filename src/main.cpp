@@ -32,6 +32,9 @@ struct CliOptions {
     double timingLogSigma = 0.60;
     double timingPowerAlpha = 1.80;
     double timingAutoChaos = 0.55;
+    double geneticMutationRate = 0.28;
+    double geneticMutationDepth = 0.35;
+    double geneticAlgorithmMutation = 0.18;
     std::string switchMode = "timer";
     std::string mixMode = "smoothed";
     double entropyDeltaUp = 0.015;
@@ -186,6 +189,9 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --timing-log-sigma <v>     sigma для lognormal-таймингов (по умолчанию 0.60)\n"
         << "  --timing-power-alpha <v>   alpha для power-law таймингов (по умолчанию 1.80)\n"
         << "  --timing-auto-chaos <v>    степень хаоса режима auto [0..1] (по умолчанию 0.55)\n"
+        << "  --genetic-mutation-rate <v> вероятность мутации при genetic spawn [0..1]\n"
+        << "  --genetic-mutation-depth <v> глубина мутации параметров [0..1]\n"
+        << "  --genetic-algo-mutation <v> вероятность смены алгоритма при genetic spawn [0..1]\n"
         << "  --switch-mode <mode>       режим переключения сцен (timer|entropy-triggered)\n"
         << "  --mix-mode <mode>          режим микширования (smoothed)\n"
         << "  --entropy-delta-up <v>     порог роста энтропии RAM для switch (по умолчанию 0.015)\n"
@@ -325,6 +331,21 @@ bool parseCli(int argc,
         } else if (isFlag(arg, "--timing-auto-chaos")) {
             if (!requireValue(arg, value) || !parseDouble(value, options.timingAutoChaos)) {
                 error = "Некорректное значение --timing-auto-chaos";
+                return false;
+            }
+        } else if (isFlag(arg, "--genetic-mutation-rate")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.geneticMutationRate)) {
+                error = "Некорректное значение --genetic-mutation-rate";
+                return false;
+            }
+        } else if (isFlag(arg, "--genetic-mutation-depth")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.geneticMutationDepth)) {
+                error = "Некорректное значение --genetic-mutation-depth";
+                return false;
+            }
+        } else if (isFlag(arg, "--genetic-algo-mutation")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.geneticAlgorithmMutation)) {
+                error = "Некорректное значение --genetic-algo-mutation";
                 return false;
             }
         } else if (isFlag(arg, "--switch-mode")) {
@@ -548,6 +569,21 @@ bool parseCli(int argc,
         return false;
     }
 
+    if (options.geneticMutationRate < 0.0 || options.geneticMutationRate > 1.0) {
+        error = "--genetic-mutation-rate должен быть в диапазоне [0, 1]";
+        return false;
+    }
+
+    if (options.geneticMutationDepth < 0.0 || options.geneticMutationDepth > 1.0) {
+        error = "--genetic-mutation-depth должен быть в диапазоне [0, 1]";
+        return false;
+    }
+
+    if (options.geneticAlgorithmMutation < 0.0 || options.geneticAlgorithmMutation > 1.0) {
+        error = "--genetic-algo-mutation должен быть в диапазоне [0, 1]";
+        return false;
+    }
+
     if (options.switchMode != "timer" && options.switchMode != "entropy-triggered") {
         error = "Некорректный --switch-mode: " + options.switchMode +
                 " (поддерживается: timer|entropy-triggered)";
@@ -686,6 +722,9 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.timingLogSigma = options.timingLogSigma;
     config.timingPowerAlpha = options.timingPowerAlpha;
     config.timingAutoChaos = options.timingAutoChaos;
+    config.geneticMutationRate = options.geneticMutationRate;
+    config.geneticMutationDepth = options.geneticMutationDepth;
+    config.geneticAlgorithmMutation = options.geneticAlgorithmMutation;
     config.switchMode = options.switchMode;
     config.mixMode = options.mixMode;
     config.entropyDeltaUp = options.entropyDeltaUp;

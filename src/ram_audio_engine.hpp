@@ -21,6 +21,7 @@ struct VoiceDescriptor {
     std::string algorithmId;
     bool anchor = false;
     double volume = 0.0;
+    int downsample = 1;
     int ageSamples = 0;
     int lifeSamples = 0;
     double currentValue = 0.0;
@@ -83,6 +84,9 @@ struct EngineConfig {
     double timingLogSigma = 0.60;
     double timingPowerAlpha = 1.80;
     double timingAutoChaos = 0.55;
+    double geneticMutationRate = 0.28;
+    double geneticMutationDepth = 0.35;
+    double geneticAlgorithmMutation = 0.18;
     double entropyDeltaUp = 0.015;
     double entropyDeltaDown = 0.015;
     double entropyHysteresis = 0.004;
@@ -157,6 +161,7 @@ private:
                     const std::vector<std::uint8_t>& memory,
                     double macroMod);
         void onMemorySizeChanged(std::size_t newMemorySize);
+        void applyGenetics(double volume, int downsample, int lifeSamples);
 
     private:
         std::unique_ptr<IRamAlgorithm> algorithm_;

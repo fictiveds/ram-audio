@@ -787,6 +787,7 @@ VoiceDescriptor RamAudioEngine::SynthVoice::descriptor() const {
     desc.algorithmId = algorithm_ ? algorithm_->id() : "unknown";
     desc.anchor = anchor_;
     desc.volume = volume_;
+    desc.downsample = downsample_;
     desc.ageSamples = age_;
     desc.lifeSamples = lifeSamples_;
     desc.currentValue = currentValue_;
@@ -827,6 +828,14 @@ double RamAudioEngine::SynthVoice::tick(std::uint64_t sampleIndex,
 void RamAudioEngine::SynthVoice::onMemorySizeChanged(std::size_t newMemorySize) {
     if (algorithm_) {
         algorithm_->onMemorySizeChanged(newMemorySize);
+    }
+}
+
+void RamAudioEngine::SynthVoice::applyGenetics(double volume, int downsample, int lifeSamples) {
+    volume_ = std::clamp(volume, 0.08, 1.0);
+    downsample_ = std::max(1, std::min(80, downsample));
+    if (!anchor_) {
+        lifeSamples_ = std::max(sampleRate_ / 2, lifeSamples);
     }
 }
 
@@ -977,6 +986,72 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         }
 
         voices.emplace_back(std::move(algo), config_.sampleRate, rng_, anchor);
+        return true;
+    };
+
+    auto spawnGeneticVoice = [&]() -> bool {
+        std::vector<VoiceDescriptor> pool;
+        pool.reserve(voices.size());
+        for (const auto& voice : voices) {
+            const VoiceDescriptor d = voice.descriptor();
+            if (!d.anchor) {
+                pool.push_back(d);
+            }
+        }
+
+        if (pool.size() < 2) {
+            return createVoice(false);
+        }
+
+        std::uniform_int_distribution<std::size_t> parentDist(0, pool.size() - 1);
+        const std::size_t parentA = parentDist(rng_);
+        std::size_t parentB = parentDist(rng_);
+        while (parentB == parentA && pool.size() > 1) {
+            parentB = parentDist(rng_);
+        }
+
+        const VoiceDescriptor& p1 = pool[parentA];
+        const VoiceDescriptor& p2 = pool[parentB];
+
+        std::string childAlgorithm = randomDouble(rng_, 0.0, 1.0) < 0.5
+                                         ? p1.algorithmId
+                                         : p2.algorithmId;
+
+        if (randomDouble(rng_, 0.0, 1.0) < config_.geneticAlgorithmMutation) {
+            const std::string mutated = hmmSelector.pick(registry_.entries(), config_.allowedAlgorithmIds, rng_);
+            if (!mutated.empty() && isAllowed(mutated)) {
+                childAlgorithm = mutated;
+            }
+        }
+
+        if (!createVoice(false, childAlgorithm)) {
+            return false;
+        }
+
+        double childVolume = (p1.volume + p2.volume) * 0.5;
+        int childDownsample = std::max(1, static_cast<int>(
+            std::lround((static_cast<double>(p1.downsample + p2.downsample)) * 0.5)));
+        const int p1Life = std::max(config_.sampleRate / 2, p1.lifeSamples);
+        const int p2Life = std::max(config_.sampleRate / 2, p2.lifeSamples);
+        int childLife = std::max(
+            config_.sampleRate / 2,
+            static_cast<int>((static_cast<long long>(p1Life) + static_cast<long long>(p2Life)) / 2LL));
+
+        if (randomDouble(rng_, 0.0, 1.0) < config_.geneticMutationRate) {
+            const double jitter = randomDouble(rng_, -0.45, 0.45) * config_.geneticMutationDepth;
+            childVolume *= (1.0 + jitter);
+        }
+        if (randomDouble(rng_, 0.0, 1.0) < config_.geneticMutationRate) {
+            const int jitter = static_cast<int>(
+                std::lround(randomDouble(rng_, -16.0, 16.0) * config_.geneticMutationDepth));
+            childDownsample += jitter;
+        }
+        if (randomDouble(rng_, 0.0, 1.0) < config_.geneticMutationRate) {
+            const double lifeSecJitter = randomDouble(rng_, -10.0, 10.0) * config_.geneticMutationDepth;
+            childLife += static_cast<int>(lifeSecJitter * static_cast<double>(config_.sampleRate));
+        }
+
+        voices.back().applyGenetics(childVolume, childDownsample, childLife);
         return true;
     };
 
@@ -1158,7 +1233,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                 std::max(1, config_.minVoices),
                 static_cast<int>(std::round(static_cast<double>(targetVoices) * (0.6 + sceneDensity * 0.8))));
             if (static_cast<int>(voices.size()) < adaptiveTarget) {
-                createVoice(false);
+                spawnGeneticVoice();
             }
         }
         if (nextVoiceTime == 0) {
@@ -1219,7 +1294,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         if (noveltyGuard.shouldRecover(sceneState.telemetry, i)) {
             int spawned = 0;
             while (spawned < config_.noveltySpawnExtra) {
-                if (!createVoice(false)) {
+                if (!spawnGeneticVoice()) {
                     break;
                 }
                 ++spawned;
@@ -1242,7 +1317,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         if (silenceSamples >= silenceRecoverySamples) {
             int spawned = 0;
             while (spawned < 2) {
-                if (!createVoice(false)) {
+                if (!spawnGeneticVoice()) {
                     break;
                 }
                 ++spawned;
