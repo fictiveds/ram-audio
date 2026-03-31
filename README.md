@@ -38,13 +38,17 @@ sudo ./build/ram_audio --mode file --output real_ram_symphony_cpp.wav --duration
 ### 2) Режим стрима (RAW PCM S16LE, mono)
 
 ```bash
-sudo ./build/ram_audio --mode stream --duration 60 --sample-rate 44100 | ffplay -f s16le -ar 44100 -ac 1 -
+sudo -v
+sudo ./build/ram_audio --mode stream --duration 60 --sample-rate 44100 | ffplay -hide_banner -f s16le -ar 44100 -ch_layout mono -
 ```
+
+`sudo -v` сначала явно запрашивает пароль, и только потом запускается пайп с `ffplay`.
 
 ### 3) Бесконечный стрим (до Ctrl+C)
 
 ```bash
-sudo ./build/ram_audio --mode stream --infinite --sample-rate 44100 | ffplay -f s16le -ar 44100 -ac 1 -
+sudo -v
+sudo ./build/ram_audio --mode stream --infinite --sample-rate 44100 | ffplay -hide_banner -f s16le -ar 44100 -ch_layout mono -
 ```
 
 Для снижения underrun можно увеличить буфер:
@@ -150,6 +154,21 @@ registry.registerAlgorithm({
 sudo ./build/ram_audio --mode stream --infinite --algorithms chaotic_lorenz_fm,pointer_walk_melody,granular_freeze_scrub | aplay -f S16_LE -r 44100 -c 1
 ```
 
+## Удобный запуск через ffplay
+
+Если `ffplay` стартует одновременно с `sudo`, в консоли может казаться, что prompt пароля "теряется" в логах.
+Для явного запроса пароля сначала используйте helper-скрипт:
+
+```bash
+bash scripts/stream_ffplay.sh 60
+```
+
+Бесконечный режим:
+
+```bash
+bash scripts/stream_ffplay.sh --infinite
+```
+
 Экстремальный микс из всех экспериментальных алгоритмов:
 
 ```bash
@@ -161,6 +180,10 @@ sudo ./build/ram_audio --mode stream --infinite --buffer-ms 1200 --algorithms ch
 ```bash
 sudo ./build/ram_audio --mode stream --infinite --buffer-ms 1000 --algorithms microtonal_glitch_grid,polymeter_euclidean_micro,tritave_odd_meter_chords,pointer_walk_melody,granular_freeze_scrub | aplay -f S16_LE -r 44100 -c 1
 ```
+
+sudo ./build/ram_audio --mode file --output real_ram_symphony_cpp.wav --duration 300 --buffer-ms 1000 --algorithms microtonal_glitch_grid,polymeter_euclidean_micro,tritave_odd_meter_chords,pointer_walk_melody,granular_freeze_scrub | aplay -f S16_LE -r 44100 -c 1
+
+sudo ./build/ram_audio --mode file --output real_ram_symphony_cpp.wav --duration 300 --buffer-ms 1200 --algorithms chaotic_lorenz_fm,pointer_walk_melody,granular_freeze_scrub,cellular_automata_noise,resonator_bank_entropy,ring_mod_bitplanes,karplus_ram_string,fractal_byte_terrain,microtonal_glitch_grid,polymeter_euclidean_micro,tritave_odd_meter_chords | aplay -f S16_LE -r 44100 -c 1
 
 ## Защита от тишины
 
