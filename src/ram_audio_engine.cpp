@@ -893,8 +893,20 @@ public:
 
         const std::size_t n = in.size();
         std::vector<double> out(n, 0.0);
+        double inEnergy = 0.0;
+        for (double s : in) {
+            if (std::isfinite(s)) {
+                inEnergy += s * s;
+            }
+        }
+
         for (std::size_t i = 0; i < n; ++i) {
             const double carrier = in[i];
+            if (!std::isfinite(carrier)) {
+                out[i] = 0.0;
+                continue;
+            }
+
             double mod = 0.0;
             for (std::size_t j = 0; j < n; ++j) {
                 if (j == i) {
@@ -908,7 +920,22 @@ public:
             const double am = carrier * (1.0 + depth_ * std::tanh(mod * 0.2));
             const double ring = carrier + (depth_ * 0.6) * (carrier * std::tanh(mod));
             const double mixed = 0.55 * am + 0.45 * ring;
-            out[i] = wavefold(mixed, wavefoldDepth_ * (0.2 + depth_ * 0.8));
+            const double shaped = wavefold(mixed, wavefoldDepth_ * (0.2 + depth_ * 0.8));
+            out[i] = carrier * (1.0 - depth_ * 0.45) + shaped * (depth_ * 0.45);
+        }
+
+        double outEnergy = 0.0;
+        for (double v : out) {
+            if (std::isfinite(v)) {
+                outEnergy += v * v;
+            }
+        }
+
+        if (inEnergy > 1e-9 && outEnergy > 1e-9) {
+            const double makeUp = std::clamp(std::sqrt(inEnergy / outEnergy), 0.35, 8.0);
+            for (double& v : out) {
+                v *= makeUp;
+            }
         }
 
         double sum = 0.0;
@@ -925,6 +952,10 @@ public:
         }
 
         return out;
+    }
+
+    bool enabled() const {
+        return enabled_;
     }
 
 private:
@@ -950,11 +981,17 @@ private:
     }
 
     static double wavefold(double x, double amount) {
-        if (amount <= 0.0) {
-            return x;
+        if (amount <= 0.0 || !std::isfinite(x)) {
+            return std::isfinite(x) ? x : 0.0;
         }
-        const double k = 1.0 + amount * 3.5;
-        return std::tanh(x * k) / k + std::sin(x * k * 0.5) * amount * 0.15;
+
+        const double scale = std::max(1.0, std::fabs(x));
+        const double xn = x / scale;
+        const double drive = 1.0 + amount * 4.0;
+        const double folded = std::sin(xn * kPi * drive);
+        const double shaped = std::tanh((0.65 * xn + 0.35 * folded) * drive * 0.8);
+        const double blended = xn * (1.0 - amount) + shaped * amount;
+        return blended * scale;
     }
 
     bool enabled_;
@@ -1517,6 +1554,14 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
 
         telemetry.pushSample(smoothedSample, i);
         sceneState.telemetry = telemetry.metrics();
+
+        if (modMatrix.enabled() && sceneState.telemetry.valid && sceneState.telemetry.rms < 15.0) {
+            if (config_.verbose && (i % static_cast<std::uint64_t>(config_.sampleRate) == 0ULL)) {
+                std::cerr << "\n[!] Mod-matrix fallback: low RMS detected, injecting dry recovery" << std::endl;
+            }
+            const double dryRecovery = bandMixer.process(sceneState, voiceDescriptors, voiceSamples);
+            smoothedSample = 0.7 * dryRecovery + 0.3 * smoothedSample;
+        }
 
         if (noveltyGuard.shouldRecover(sceneState.telemetry, i)) {
             int spawned = 0;
