@@ -586,6 +586,10 @@ bool parseCli(int argc,
         return false;
     }
 
+    if (options.modulationMatrixEnable && options.bufferMs > 200) {
+        options.bufferMs = 120;
+    }
+
     if (!options.algorithms.empty()) {
         for (const auto& id : options.algorithms) {
             if (!registry.has(id)) {

@@ -883,7 +883,8 @@ public:
           depth_(std::clamp(depth, 0.0, 1.0)),
           feedbackLimit_(std::clamp(feedbackLimit, 0.0, 0.95)),
           wavefoldDepth_(std::clamp(wavefoldDepth, 0.0, 1.0)),
-          feedbackState_(0.0) {}
+          feedbackState_(0.0),
+          holdCounter_(0) {}
 
     const std::vector<double>& process(const std::vector<VoiceDescriptor>& voices,
                                        const std::vector<double>& in) {
@@ -893,6 +894,17 @@ public:
         }
 
         const std::size_t n = in.size();
+        const int updateStride = chooseUpdateStride(n);
+        if (holdCounter_ > 0 && held_.size() == n) {
+            --holdCounter_;
+            scratch_.resize(n);
+            const double wet = 0.55 + depth_ * 0.25;
+            for (std::size_t i = 0; i < n; ++i) {
+                scratch_[i] = in[i] * (1.0 - wet) + held_[i] * wet;
+            }
+            return scratch_;
+        }
+
         scratch_.assign(n, 0.0);
         double inEnergy = 0.0;
         for (double s : in) {
@@ -952,6 +964,9 @@ public:
             v = std::clamp(v + feedbackState_ * 0.3, -32000.0, 32000.0);
         }
 
+        held_ = scratch_;
+        holdCounter_ = std::max(0, updateStride - 1);
+
         return scratch_;
     }
 
@@ -960,6 +975,23 @@ public:
     }
 
 private:
+    int chooseUpdateStride(std::size_t voiceCount) const {
+        int stride = 1;
+        if (depth_ > 0.25) {
+            stride = 2;
+        }
+        if (depth_ > 0.45) {
+            stride = 3;
+        }
+        if (depth_ > 0.65) {
+            stride = 4;
+        }
+        if (voiceCount > 8) {
+            stride += 1;
+        }
+        return stride;
+    }
+
     static double idHashWeight(const std::string& id) {
         std::uint32_t h = 2166136261u;
         for (char c : id) {
@@ -1000,7 +1032,9 @@ private:
     double feedbackLimit_;
     double wavefoldDepth_;
     double feedbackState_;
+    int holdCounter_;
     std::vector<double> scratch_;
+    std::vector<double> held_;
 };
 
 }  // namespace
