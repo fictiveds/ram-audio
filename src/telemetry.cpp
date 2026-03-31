@@ -16,13 +16,30 @@ double clampDouble(double value, double minValue, double maxValue) {
     return std::max(minValue, std::min(maxValue, value));
 }
 
+std::size_t nextPowerOfTwo(std::size_t value) {
+    std::size_t out = 1;
+    while (out < value) {
+        out <<= 1U;
+    }
+    return out;
+}
+
 }  // namespace
 
 AudioTelemetry::AudioTelemetry(int sampleRate, std::size_t windowSize, std::size_t hopSize)
     : sampleRate_(std::max(1, sampleRate)),
       windowSize_(std::max<std::size_t>(256, windowSize)),
       hopSize_(std::max<std::size_t>(1, hopSize)),
+      spectralSize_(nextPowerOfTwo(std::max<std::size_t>(256, windowSize_ / 8))),
+      spectralBins_(std::min<std::size_t>(64, spectralSize_ / 2)),
+      spectralStride_(std::max<std::size_t>(1, windowSize_ / std::max<std::size_t>(1, spectralSize_))),
       ring_(windowSize_, 0.0),
+      orderedWindow_(),
+      spectralWindow_(),
+      hannWindow_(),
+      cosTable_(),
+      sinTable_(),
+      binFreqsHz_(),
       writePos_(0),
       filled_(0),
       samplesSinceUpdate_(0),
@@ -30,6 +47,19 @@ AudioTelemetry::AudioTelemetry(int sampleRate, std::size_t windowSize, std::size
     if (hopSize_ > windowSize_) {
         hopSize_ = windowSize_;
     }
+
+    if (spectralSize_ < 64) {
+        spectralSize_ = 64;
+    }
+    if (spectralBins_ < 4) {
+        spectralBins_ = 4;
+    }
+
+    orderedWindow_.reserve(windowSize_);
+    spectralWindow_.resize(spectralSize_, 0.0);
+    hannWindow_.resize(spectralSize_, 0.0);
+
+    initSpectralTables();
 }
 
 void AudioTelemetry::pushSample(double sample, std::uint64_t sampleIndex) {
@@ -51,18 +81,50 @@ const TelemetryMetrics& AudioTelemetry::metrics() const {
     return metrics_;
 }
 
-std::vector<double> AudioTelemetry::copyWindow() const {
-    std::vector<double> window;
-    window.reserve(windowSize_);
+void AudioTelemetry::copyWindow(std::vector<double>& out) const {
+    out.clear();
+    out.reserve(windowSize_);
     for (std::size_t i = 0; i < windowSize_; ++i) {
         const std::size_t idx = (writePos_ + i) % windowSize_;
-        window.push_back(ring_[idx]);
+        out.push_back(ring_[idx]);
     }
-    return window;
+}
+
+void AudioTelemetry::initSpectralTables() {
+    const std::size_t n = spectralSize_;
+    if (n == 0) {
+        return;
+    }
+
+    for (std::size_t i = 0; i < n; ++i) {
+        const double phase = (2.0 * kPi * static_cast<double>(i)) /
+                             static_cast<double>(std::max<std::size_t>(1, n - 1));
+        hannWindow_[i] = 0.5 - 0.5 * std::cos(phase);
+    }
+
+    cosTable_.resize(spectralBins_ * n, 0.0);
+    sinTable_.resize(spectralBins_ * n, 0.0);
+    binFreqsHz_.resize(spectralBins_, 0.0);
+
+    for (std::size_t band = 0; band < spectralBins_; ++band) {
+        const std::size_t bin = (band + 1) * (n / 2) / spectralBins_;
+        const double freqHz = (static_cast<double>(bin) * static_cast<double>(sampleRate_)) /
+                              static_cast<double>(n);
+        binFreqsHz_[band] = freqHz;
+
+        const std::size_t base = band * n;
+        for (std::size_t i = 0; i < n; ++i) {
+            const double angle = (2.0 * kPi * static_cast<double>(bin) * static_cast<double>(i)) /
+                                 static_cast<double>(n);
+            cosTable_[base + i] = std::cos(angle);
+            sinTable_[base + i] = std::sin(angle);
+        }
+    }
 }
 
 void AudioTelemetry::computeMetrics(std::uint64_t sampleIndex) {
-    const std::vector<double> window = copyWindow();
+    copyWindow(orderedWindow_);
+    const std::vector<double>& window = orderedWindow_;
     const std::size_t n = window.size();
     if (n < 2) {
         return;
@@ -103,26 +165,27 @@ void AudioTelemetry::computeMetrics(std::uint64_t sampleIndex) {
     }
     const double transientDensity = static_cast<double>(transientCount) / static_cast<double>(std::max<std::size_t>(1, diffs.size()));
 
-    const std::size_t spectrumBands = std::min<std::size_t>(64, n / 2);
+    for (std::size_t i = 0; i < spectralSize_; ++i) {
+        const std::size_t src = std::min<std::size_t>(n - 1, i * spectralStride_);
+        spectralWindow_[i] = window[src] * hannWindow_[i];
+    }
+
     double magnitudeSum = 0.0;
     double weightedFreqSum = 0.0;
     double logMagnitudeSum = 0.0;
 
-    for (std::size_t band = 1; band <= spectrumBands; ++band) {
-        const std::size_t bin = (band * (n / 2)) / spectrumBands;
+    for (std::size_t band = 0; band < spectralBins_; ++band) {
+        const std::size_t base = band * spectralSize_;
         double re = 0.0;
         double im = 0.0;
-        for (std::size_t i = 0; i < n; ++i) {
-            const double angle = (2.0 * kPi * static_cast<double>(bin) * static_cast<double>(i)) /
-                                 static_cast<double>(n);
-            const double s = window[i];
-            re += s * std::cos(angle);
-            im -= s * std::sin(angle);
+        for (std::size_t i = 0; i < spectralSize_; ++i) {
+            const double s = spectralWindow_[i];
+            re += s * cosTable_[base + i];
+            im -= s * sinTable_[base + i];
         }
 
         const double magnitude = std::sqrt(re * re + im * im) + kEpsilon;
-        const double freqHz = (static_cast<double>(bin) * static_cast<double>(sampleRate_)) /
-                              static_cast<double>(n);
+        const double freqHz = binFreqsHz_[band];
 
         magnitudeSum += magnitude;
         weightedFreqSum += magnitude * freqHz;
@@ -133,8 +196,8 @@ void AudioTelemetry::computeMetrics(std::uint64_t sampleIndex) {
                                   ? weightedFreqSum / magnitudeSum
                                   : 0.0;
 
-    const double arithMean = magnitudeSum / static_cast<double>(std::max<std::size_t>(1, spectrumBands));
-    const double geoMean = std::exp(logMagnitudeSum / static_cast<double>(std::max<std::size_t>(1, spectrumBands)));
+    const double arithMean = magnitudeSum / static_cast<double>(std::max<std::size_t>(1, spectralBins_));
+    const double geoMean = std::exp(logMagnitudeSum / static_cast<double>(std::max<std::size_t>(1, spectralBins_)));
     const double flatness = arithMean > kEpsilon ? geoMean / arithMean : 0.0;
 
     metrics_.rms = rms;

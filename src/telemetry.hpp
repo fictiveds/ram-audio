@@ -25,12 +25,22 @@ public:
 
 private:
     void computeMetrics(std::uint64_t sampleIndex);
-    std::vector<double> copyWindow() const;
+    void copyWindow(std::vector<double>& out) const;
+    void initSpectralTables();
 
     int sampleRate_;
     std::size_t windowSize_;
     std::size_t hopSize_;
+    std::size_t spectralSize_;
+    std::size_t spectralBins_;
+    std::size_t spectralStride_;
     std::vector<double> ring_;
+    std::vector<double> orderedWindow_;
+    std::vector<double> spectralWindow_;
+    std::vector<double> hannWindow_;
+    std::vector<double> cosTable_;
+    std::vector<double> sinTable_;
+    std::vector<double> binFreqsHz_;
     std::size_t writePos_;
     std::size_t filled_;
     std::size_t samplesSinceUpdate_;
