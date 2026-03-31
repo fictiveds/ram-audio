@@ -38,17 +38,15 @@ sudo ./build/ram_audio --mode file --output real_ram_symphony_cpp.wav --duration
 ### 2) Режим стрима (RAW PCM S16LE, mono)
 
 ```bash
-sudo -v
-sudo ./build/ram_audio --mode stream --duration 60 --sample-rate 44100 | ffplay -hide_banner -f s16le -ar 44100 -ch_layout mono -
+sudo -k && sudo --prompt='[sudo] Пароль для %u: ' -v && (sudo ./build/ram_audio --mode stream --duration 60 --sample-rate 44100 --buffer-ms 1000 | ffplay -hide_banner -nostats -loglevel warning -f s16le -ar 44100 -ch_layout mono -)
 ```
 
-`sudo -v` сначала явно запрашивает пароль, и только потом запускается пайп с `ffplay`.
+`sudo -k` сбрасывает кэш прав, `sudo -v` сначала показывает prompt пароля, и только после этого запускается `ffplay`.
 
 ### 3) Бесконечный стрим (до Ctrl+C)
 
 ```bash
-sudo -v
-sudo ./build/ram_audio --mode stream --infinite --sample-rate 44100 | ffplay -hide_banner -f s16le -ar 44100 -ch_layout mono -
+sudo -k && sudo --prompt='[sudo] Пароль для %u: ' -v && (sudo ./build/ram_audio --mode stream --infinite --sample-rate 44100 --buffer-ms 1000 | ffplay -hide_banner -nostats -loglevel warning -f s16le -ar 44100 -ch_layout mono -)
 ```
 
 Для снижения underrun можно увеличить буфер:
@@ -152,25 +150,6 @@ registry.registerAlgorithm({
 
 ```bash
 sudo ./build/ram_audio --mode stream --infinite --algorithms chaotic_lorenz_fm,pointer_walk_melody,granular_freeze_scrub | aplay -f S16_LE -r 44100 -c 1
-```
-
-## Удобный запуск через ffplay
-
-Если `ffplay` стартует одновременно с `sudo`, в консоли может казаться, что prompt пароля "теряется" в логах.
-Для явного запроса пароля сначала используйте helper-скрипт:
-
-```bash
-bash scripts/stream_ffplay.sh 60
-```
-
-Скрипт выводит явные этапы:
-- `[sudo] Сейчас будет запрос пароля...`
-- `[ok] Пароль принят...`
-
-Бесконечный режим:
-
-```bash
-bash scripts/stream_ffplay.sh --infinite
 ```
 
 Экстремальный микс из всех экспериментальных алгоритмов:
