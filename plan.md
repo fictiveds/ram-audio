@@ -59,7 +59,7 @@
   - Невалидные комбинации параметров корректно валидируются с понятной ошибкой.
   - Конфиг передается в `RamAudioEngine` без хардкода значений в runtime.
 
-#### [ ] T1.4 Add deterministic run logging
+#### [ ] T1.4 Add deterministic run logging (SKIPPED by request)
 - Description: журналировать события сцен (switch/spawn/mix profile), чтобы можно было повторить поведение по seed.
 - DoD:
   - При заданном `--seed` последовательность событий совпадает между запусками.
@@ -151,7 +151,7 @@
   - Есть защита от невалидных параметров (clamp, sanitize).
   - Spawn-события увеличивают разнообразие без потери стабильности loudness.
 
-#### [ ] T3.6 Implement `chaotic_timing`
+#### [x] T3.6 Implement `chaotic_timing`
 - Description: интервалы switch/spawn по log-normal/power-law, а не равномерно.
 - DoD:
   - Реализованы минимум 2 распределения + режим auto.

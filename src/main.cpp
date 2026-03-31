@@ -28,6 +28,10 @@ struct CliOptions {
     int memorySwitchMaxSec = 40;
     int voiceSpawnMinSec = 2;
     int voiceSpawnMaxSec = 8;
+    std::string timingMode = "uniform";
+    double timingLogSigma = 0.60;
+    double timingPowerAlpha = 1.80;
+    double timingAutoChaos = 0.55;
     std::string switchMode = "timer";
     std::string mixMode = "smoothed";
     double entropyDeltaUp = 0.015;
@@ -178,6 +182,10 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --buffer-ms <ms>           буфер вывода для stream, 0=без буфера (по умолчанию 500)\n"
         << "  --max-memory-mb <mb>       лимит считанной памяти процесса (по умолчанию 60)\n"
         << "  --algorithms <a,b,c>       список ID алгоритмов для выбора\n"
+        << "  --timing-mode <m>          режим таймингов (uniform|lognormal|powerlaw|auto)\n"
+        << "  --timing-log-sigma <v>     sigma для lognormal-таймингов (по умолчанию 0.60)\n"
+        << "  --timing-power-alpha <v>   alpha для power-law таймингов (по умолчанию 1.80)\n"
+        << "  --timing-auto-chaos <v>    степень хаоса режима auto [0..1] (по умолчанию 0.55)\n"
         << "  --switch-mode <mode>       режим переключения сцен (timer|entropy-triggered)\n"
         << "  --mix-mode <mode>          режим микширования (smoothed)\n"
         << "  --entropy-delta-up <v>     порог роста энтропии RAM для switch (по умолчанию 0.015)\n"
@@ -299,6 +307,26 @@ bool parseCli(int argc,
                 return false;
             }
             options.algorithms = splitCsv(value);
+        } else if (isFlag(arg, "--timing-mode")) {
+            if (!requireValue(arg, value)) {
+                return false;
+            }
+            options.timingMode = value;
+        } else if (isFlag(arg, "--timing-log-sigma")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.timingLogSigma)) {
+                error = "Некорректное значение --timing-log-sigma";
+                return false;
+            }
+        } else if (isFlag(arg, "--timing-power-alpha")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.timingPowerAlpha)) {
+                error = "Некорректное значение --timing-power-alpha";
+                return false;
+            }
+        } else if (isFlag(arg, "--timing-auto-chaos")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.timingAutoChaos)) {
+                error = "Некорректное значение --timing-auto-chaos";
+                return false;
+            }
         } else if (isFlag(arg, "--switch-mode")) {
             if (!requireValue(arg, value)) {
                 return false;
@@ -496,6 +524,30 @@ bool parseCli(int argc,
         }
     }
 
+    if (options.timingMode != "uniform" &&
+        options.timingMode != "lognormal" &&
+        options.timingMode != "powerlaw" &&
+        options.timingMode != "auto") {
+        error = "Некорректный --timing-mode: " + options.timingMode +
+                " (поддерживается: uniform|lognormal|powerlaw|auto)";
+        return false;
+    }
+
+    if (options.timingLogSigma < 0.05 || options.timingLogSigma > 2.5) {
+        error = "--timing-log-sigma должен быть в диапазоне [0.05, 2.5]";
+        return false;
+    }
+
+    if (options.timingPowerAlpha < 1.05 || options.timingPowerAlpha > 3.5) {
+        error = "--timing-power-alpha должен быть в диапазоне [1.05, 3.5]";
+        return false;
+    }
+
+    if (options.timingAutoChaos < 0.0 || options.timingAutoChaos > 1.0) {
+        error = "--timing-auto-chaos должен быть в диапазоне [0, 1]";
+        return false;
+    }
+
     if (options.switchMode != "timer" && options.switchMode != "entropy-triggered") {
         error = "Некорректный --switch-mode: " + options.switchMode +
                 " (поддерживается: timer|entropy-triggered)";
@@ -630,6 +682,10 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.memorySwitchMaxSec = options.memorySwitchMaxSec;
     config.voiceSpawnMinSec = options.voiceSpawnMinSec;
     config.voiceSpawnMaxSec = options.voiceSpawnMaxSec;
+    config.timingMode = options.timingMode;
+    config.timingLogSigma = options.timingLogSigma;
+    config.timingPowerAlpha = options.timingPowerAlpha;
+    config.timingAutoChaos = options.timingAutoChaos;
     config.switchMode = options.switchMode;
     config.mixMode = options.mixMode;
     config.entropyDeltaUp = options.entropyDeltaUp;

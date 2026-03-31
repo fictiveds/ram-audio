@@ -79,6 +79,10 @@ struct EngineConfig {
     int memorySwitchMaxSec = 40;
     int voiceSpawnMinSec = 2;
     int voiceSpawnMaxSec = 8;
+    std::string timingMode = "uniform";
+    double timingLogSigma = 0.60;
+    double timingPowerAlpha = 1.80;
+    double timingAutoChaos = 0.55;
     double entropyDeltaUp = 0.015;
     double entropyDeltaDown = 0.015;
     double entropyHysteresis = 0.004;

@@ -124,6 +124,71 @@ double normalizedShannonEntropy(const std::vector<std::uint8_t>& bytes) {
     return std::clamp(entropy / kMaxEntropy, 0.0, 1.0);
 }
 
+double sampleTimingSeconds(std::mt19937& rng,
+                          const std::string& mode,
+                          double minSec,
+                          double maxSec,
+                          double logSigma,
+                          double powerAlpha,
+                          double autoChaos) {
+    const double lo = std::max(1e-3, minSec);
+    const double hi = std::max(lo, maxSec);
+
+    auto uniformSeconds = [&]() {
+        return randomDouble(rng, lo, hi);
+    };
+
+    if (mode == "uniform") {
+        return uniformSeconds();
+    }
+
+    auto lognormalSeconds = [&]() {
+        const double median = std::sqrt(lo * hi);
+        const double sigma = std::clamp(logSigma, 0.05, 2.5);
+        const double mu = std::log(std::max(1e-6, median));
+        std::lognormal_distribution<double> dist(mu, sigma);
+
+        for (int i = 0; i < 12; ++i) {
+            const double v = dist(rng);
+            if (v >= lo && v <= hi) {
+                return v;
+            }
+        }
+        return std::clamp(dist(rng), lo, hi);
+    };
+
+    auto powerlawSeconds = [&]() {
+        const double alpha = std::clamp(powerAlpha, 1.05, 3.5);
+        std::uniform_real_distribution<double> u(0.0, 1.0);
+        const double r = std::max(1e-9, 1.0 - u(rng));
+        const double exponent = -1.0 / (alpha - 1.0);
+        const double raw = lo * std::pow(r, exponent);
+        return std::clamp(raw, lo, hi);
+    };
+
+    if (mode == "lognormal") {
+        return lognormalSeconds();
+    }
+
+    if (mode == "powerlaw") {
+        return powerlawSeconds();
+    }
+
+    const double chaos = std::clamp(autoChaos, 0.0, 1.0);
+    const double wLog = 0.25 + 0.55 * chaos;
+    const double wPower = 0.15 + 0.65 * chaos;
+    const double wUniform = std::max(0.05, 1.0 - (wLog + wPower) * 0.5);
+    std::discrete_distribution<int> pick({wUniform, wLog, wPower});
+    const int choice = pick(rng);
+    if (choice == 1) {
+        return lognormalSeconds();
+    }
+    if (choice == 2) {
+        return powerlawSeconds();
+    }
+    return uniformSeconds();
+}
+
 class TimerSwitchPolicy final : public ISwitchPolicy {
 public:
     explicit TimerSwitchPolicy(std::mt19937& rng)
@@ -837,6 +902,11 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                   << std::fixed << std::setprecision(2)
                   << (static_cast<double>(snapshot.bytes.size()) / 1024.0 / 1024.0)
                   << " MB" << std::endl;
+        std::cerr << "[+] Timing mode: " << config_.timingMode
+                  << " (log-sigma=" << config_.timingLogSigma
+                  << ", power-alpha=" << config_.timingPowerAlpha
+                  << ", auto-chaos=" << config_.timingAutoChaos << ")"
+                  << std::endl;
     }
 
     std::vector<SynthVoice> voices;
@@ -918,20 +988,37 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
 
     auto schedulePidSwitchTimer = [&]() -> std::uint64_t {
         return static_cast<std::uint64_t>(
-            randomDouble(rng_, static_cast<double>(config_.memorySwitchMinSec),
-                         static_cast<double>(config_.memorySwitchMaxSec)) *
+            sampleTimingSeconds(rng_,
+                                config_.timingMode,
+                                static_cast<double>(config_.memorySwitchMinSec),
+                                static_cast<double>(config_.memorySwitchMaxSec),
+                                config_.timingLogSigma,
+                                config_.timingPowerAlpha,
+                                config_.timingAutoChaos) *
             static_cast<double>(config_.sampleRate));
     };
 
     auto scheduleVoiceSpawnTimer = [&]() -> std::uint64_t {
         return static_cast<std::uint64_t>(
-            randomDouble(rng_, static_cast<double>(config_.voiceSpawnMinSec),
-                         static_cast<double>(config_.voiceSpawnMaxSec)) *
+            sampleTimingSeconds(rng_,
+                                config_.timingMode,
+                                static_cast<double>(config_.voiceSpawnMinSec),
+                                static_cast<double>(config_.voiceSpawnMaxSec),
+                                config_.timingLogSigma,
+                                config_.timingPowerAlpha,
+                                config_.timingAutoChaos) *
             static_cast<double>(config_.sampleRate));
     };
 
     std::uint64_t nextVoiceTime = static_cast<std::uint64_t>(
-        randomDouble(rng_, 1.0, 5.0) * static_cast<double>(config_.sampleRate));
+        sampleTimingSeconds(rng_,
+                            config_.timingMode,
+                            1.0,
+                            5.0,
+                            config_.timingLogSigma,
+                            config_.timingPowerAlpha,
+                            config_.timingAutoChaos) *
+        static_cast<double>(config_.sampleRate));
     std::uint64_t pidTimer = schedulePidSwitchTimer();
 
     double smoothedSample = 0.0;
