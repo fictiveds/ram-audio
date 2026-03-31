@@ -92,6 +92,10 @@ struct EngineConfig {
     double switchProbEnergyWeight = 0.28;
     double switchProbNoveltyWeight = 0.36;
     double switchProbHysteresis = 0.08;
+    double noveltyThreshold = 0.93;
+    int noveltyHistory = 48;
+    int noveltyCooldownSec = 6;
+    int noveltySpawnExtra = 2;
     unsigned int seed = 0;
     bool verbose = true;
     const volatile std::sig_atomic_t* stopFlag = nullptr;

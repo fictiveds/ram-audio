@@ -13,6 +13,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <deque>
 #include <sstream>
 #include <string>
 #include <sys/types.h>
@@ -411,6 +412,86 @@ private:
     bool switchArmed_;
 };
 
+class NoveltyGuard final {
+public:
+    NoveltyGuard(double threshold, int historySize, int cooldownSec, int sampleRate)
+        : threshold_(std::clamp(threshold, 0.0, 1.0)),
+          historySize_(std::max(8, historySize)),
+          cooldownSamples_(std::max(0, cooldownSec * std::max(1, sampleRate))),
+          lastTriggerSample_(0),
+          hasTriggered_(false) {}
+
+    bool shouldRecover(const TelemetryMetrics& m, std::uint64_t sampleIndex) {
+        if (!m.valid) {
+            return false;
+        }
+
+        const Fingerprint fp = makeFingerprint(m);
+        const double similarity = maxSimilarity(fp);
+
+        history_.push_back(fp);
+        if (static_cast<int>(history_.size()) > historySize_) {
+            history_.pop_front();
+        }
+
+        if (hasTriggered_) {
+            const std::uint64_t since = sampleIndex - lastTriggerSample_;
+            if (since < static_cast<std::uint64_t>(cooldownSamples_)) {
+                return false;
+            }
+        }
+
+        if (similarity >= threshold_) {
+            hasTriggered_ = true;
+            lastTriggerSample_ = sampleIndex;
+            return true;
+        }
+
+        return false;
+    }
+
+private:
+    struct Fingerprint {
+        double rms;
+        double centroid;
+        double flatness;
+        double zcr;
+    };
+
+    static Fingerprint makeFingerprint(const TelemetryMetrics& m) {
+        return {
+            std::clamp(m.rms / 20000.0, 0.0, 1.0),
+            std::clamp(m.spectralCentroidHz / 22050.0, 0.0, 1.0),
+            std::clamp(m.spectralFlatness, 0.0, 1.0),
+            std::clamp(m.zeroCrossingRate, 0.0, 1.0),
+        };
+    }
+
+    static double similarity(const Fingerprint& a, const Fingerprint& b) {
+        const double dr = std::fabs(a.rms - b.rms);
+        const double dc = std::fabs(a.centroid - b.centroid);
+        const double df = std::fabs(a.flatness - b.flatness);
+        const double dz = std::fabs(a.zcr - b.zcr);
+        const double distance = (0.30 * dr) + (0.30 * dc) + (0.20 * df) + (0.20 * dz);
+        return std::clamp(1.0 - distance, 0.0, 1.0);
+    }
+
+    double maxSimilarity(const Fingerprint& current) const {
+        double maxSim = 0.0;
+        for (const auto& oldFp : history_) {
+            maxSim = std::max(maxSim, similarity(current, oldFp));
+        }
+        return maxSim;
+    }
+
+    double threshold_;
+    int historySize_;
+    int cooldownSamples_;
+    std::uint64_t lastTriggerSample_;
+    bool hasTriggered_;
+    std::deque<Fingerprint> history_;
+};
+
 }  // namespace
 
 RamAudioEngine::SynthVoice::SynthVoice(std::unique_ptr<IRamAlgorithm> algorithm,
@@ -654,6 +735,10 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                                   config_.limiterCeiling,
                                   config_.limiterMaxGain,
                                   config_.sampleRate);
+    NoveltyGuard noveltyGuard(config_.noveltyThreshold,
+                              config_.noveltyHistory,
+                              config_.noveltyCooldownSec,
+                              config_.sampleRate);
 
     const int crossfadeSamples = std::max(
         0,
@@ -822,6 +907,21 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
 
         telemetry.pushSample(smoothedSample, i);
         sceneState.telemetry = telemetry.metrics();
+
+        if (noveltyGuard.shouldRecover(sceneState.telemetry, i)) {
+            int spawned = 0;
+            while (spawned < config_.noveltySpawnExtra) {
+                if (!createVoice(false)) {
+                    break;
+                }
+                ++spawned;
+            }
+
+            if (config_.verbose) {
+                std::cerr << "\n[!] Novelty-guard: similarity threshold exceeded, recovery spawn="
+                          << spawned << std::endl;
+            }
+        }
 
         const double currentEnergy = smoothedSample * smoothedSample;
         energyEma = (energyEma * 0.9992) + (currentEnergy * 0.0008);

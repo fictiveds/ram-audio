@@ -43,6 +43,10 @@ struct CliOptions {
     double switchProbEnergyWeight = 0.28;
     double switchProbNoveltyWeight = 0.36;
     double switchProbHysteresis = 0.08;
+    double noveltyThreshold = 0.93;
+    int noveltyHistory = 48;
+    int noveltyCooldownSec = 6;
+    int noveltySpawnExtra = 2;
     unsigned int seed = 0;
     bool verbose = true;
     bool listAlgorithms = false;
@@ -183,6 +187,10 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --switch-prob-energy <v>   вес energy в switch-prob [0..1] (по умолчанию 0.28)\n"
         << "  --switch-prob-novelty <v>  вес novelty в switch-prob [0..1] (по умолчанию 0.36)\n"
         << "  --switch-prob-hyst <v>     hysteresis для switch-prob [0..1] (по умолчанию 0.08)\n"
+        << "  --novelty-threshold <v>    threshold similarity для novelty-guard [0..1]\n"
+        << "  --novelty-history <n>      размер окна fingerprint history\n"
+        << "  --novelty-cooldown <sec>   cooldown recovery novelty-guard\n"
+        << "  --novelty-spawn-extra <n>  доп. голоса при срабатывании novelty-guard\n"
         << "  --list-algorithms          показать доступные алгоритмы\n"
         << "  --seed <num>               фиксировать seed (0 = случайный)\n"
         << "  --quiet                    отключить лог прогресса\n"
@@ -354,6 +362,26 @@ bool parseCli(int argc,
                 error = "Некорректное значение --switch-prob-hyst";
                 return false;
             }
+        } else if (isFlag(arg, "--novelty-threshold")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.noveltyThreshold)) {
+                error = "Некорректное значение --novelty-threshold";
+                return false;
+            }
+        } else if (isFlag(arg, "--novelty-history")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.noveltyHistory)) {
+                error = "Некорректное значение --novelty-history";
+                return false;
+            }
+        } else if (isFlag(arg, "--novelty-cooldown")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.noveltyCooldownSec)) {
+                error = "Некорректное значение --novelty-cooldown";
+                return false;
+            }
+        } else if (isFlag(arg, "--novelty-spawn-extra")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.noveltySpawnExtra)) {
+                error = "Некорректное значение --novelty-spawn-extra";
+                return false;
+            }
         } else if (isFlag(arg, "--min-voices")) {
             if (!requireValue(arg, value) || !parseInt(value, options.minVoices)) {
                 error = "Некорректное значение --min-voices";
@@ -503,6 +531,26 @@ bool parseCli(int argc,
         return false;
     }
 
+    if (!inUnitRange(options.noveltyThreshold)) {
+        error = "--novelty-threshold должен быть в диапазоне [0, 1]";
+        return false;
+    }
+
+    if (options.noveltyHistory < 8 || options.noveltyHistory > 4096) {
+        error = "--novelty-history должен быть в диапазоне [8, 4096]";
+        return false;
+    }
+
+    if (options.noveltyCooldownSec < 0 || options.noveltyCooldownSec > 300) {
+        error = "--novelty-cooldown должен быть в диапазоне [0, 300]";
+        return false;
+    }
+
+    if (options.noveltySpawnExtra < 0 || options.noveltySpawnExtra > 8) {
+        error = "--novelty-spawn-extra должен быть в диапазоне [0, 8]";
+        return false;
+    }
+
     return true;
 }
 
@@ -533,6 +581,10 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.switchProbEnergyWeight = options.switchProbEnergyWeight;
     config.switchProbNoveltyWeight = options.switchProbNoveltyWeight;
     config.switchProbHysteresis = options.switchProbHysteresis;
+    config.noveltyThreshold = options.noveltyThreshold;
+    config.noveltyHistory = options.noveltyHistory;
+    config.noveltyCooldownSec = options.noveltyCooldownSec;
+    config.noveltySpawnExtra = options.noveltySpawnExtra;
     config.seed = options.seed;
     config.verbose = options.verbose;
     config.stopFlag = &gStopRequested;
