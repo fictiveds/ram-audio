@@ -94,6 +94,14 @@ struct EngineConfig {
     double ghostDepth = 0.20;
     double ghostDecay = 0.996;
     int ghostGrainMs = 60;
+    double transientThreshold = 0.010;
+    double transientHysteresis = 0.004;
+    int transientAttackMs = 5;
+    int transientReleaseMs = 70;
+    double transientGain = 1.12;
+    double sustainGain = 0.94;
+    double transientShape = 0.35;
+    double sustainShape = 0.20;
     double entropyDeltaUp = 0.015;
     double entropyDeltaDown = 0.015;
     double entropyHysteresis = 0.004;

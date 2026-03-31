@@ -190,7 +190,7 @@
   - Есть параметры depth/decay/grain size.
   - Подмешивание не вызывает накапливающегося шума и DC bias.
 
-#### [ ] T4.5 Implement `transient_sustain_split`
+#### [x] T4.5 Implement `transient_sustain_split`
 - Description: разделение на transient/sustain шины и раздельный микс по типу контента.
 - DoD:
   - Детектор транзиентов работает в реальном времени и имеет настраиваемые пороги.

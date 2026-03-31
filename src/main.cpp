@@ -42,6 +42,14 @@ struct CliOptions {
     double ghostDepth = 0.20;
     double ghostDecay = 0.996;
     int ghostGrainMs = 60;
+    double transientThreshold = 0.010;
+    double transientHysteresis = 0.004;
+    int transientAttackMs = 5;
+    int transientReleaseMs = 70;
+    double transientGain = 1.12;
+    double sustainGain = 0.94;
+    double transientShape = 0.35;
+    double sustainShape = 0.20;
     std::string switchMode = "timer";
     std::string mixMode = "smoothed";
     double entropyDeltaUp = 0.015;
@@ -210,6 +218,14 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --ghost-depth <v>          глубина ghost-buffer blend [0..1]\n"
         << "  --ghost-decay <v>          decay ghost-buffer blend [0.90..0.9999]\n"
         << "  --ghost-grain-ms <n>       размер grain ghost-buffer, мс\n"
+        << "  --transient-threshold <v>  порог transient detector\n"
+        << "  --transient-hysteresis <v> hysteresis transient detector\n"
+        << "  --transient-attack-ms <n>  атака transient детектора, мс\n"
+        << "  --transient-release-ms <n> release transient детектора, мс\n"
+        << "  --transient-gain <v>       gain transient шины\n"
+        << "  --sustain-gain <v>         gain sustain шины\n"
+        << "  --transient-shape <v>      shape transient шины [0..1]\n"
+        << "  --sustain-shape <v>        shape sustain шины [0..1]\n"
         << "  --switch-mode <mode>       режим переключения сцен (timer|entropy-triggered)\n"
         << "  --mix-mode <mode>          режим микширования (smoothed)\n"
         << "  --entropy-delta-up <v>     порог роста энтропии RAM для switch (по умолчанию 0.015)\n"
@@ -400,6 +416,46 @@ bool parseCli(int argc,
         } else if (isFlag(arg, "--ghost-grain-ms")) {
             if (!requireValue(arg, value) || !parseInt(value, options.ghostGrainMs)) {
                 error = "Некорректное значение --ghost-grain-ms";
+                return false;
+            }
+        } else if (isFlag(arg, "--transient-threshold")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.transientThreshold)) {
+                error = "Некорректное значение --transient-threshold";
+                return false;
+            }
+        } else if (isFlag(arg, "--transient-hysteresis")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.transientHysteresis)) {
+                error = "Некорректное значение --transient-hysteresis";
+                return false;
+            }
+        } else if (isFlag(arg, "--transient-attack-ms")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.transientAttackMs)) {
+                error = "Некорректное значение --transient-attack-ms";
+                return false;
+            }
+        } else if (isFlag(arg, "--transient-release-ms")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.transientReleaseMs)) {
+                error = "Некорректное значение --transient-release-ms";
+                return false;
+            }
+        } else if (isFlag(arg, "--transient-gain")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.transientGain)) {
+                error = "Некорректное значение --transient-gain";
+                return false;
+            }
+        } else if (isFlag(arg, "--sustain-gain")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.sustainGain)) {
+                error = "Некорректное значение --sustain-gain";
+                return false;
+            }
+        } else if (isFlag(arg, "--transient-shape")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.transientShape)) {
+                error = "Некорректное значение --transient-shape";
+                return false;
+            }
+        } else if (isFlag(arg, "--sustain-shape")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.sustainShape)) {
+                error = "Некорректное значение --sustain-shape";
                 return false;
             }
         } else if (isFlag(arg, "--switch-mode")) {
@@ -689,6 +745,46 @@ bool parseCli(int argc,
         return false;
     }
 
+    if (options.transientThreshold < 0.0001 || options.transientThreshold > 0.2) {
+        error = "--transient-threshold должен быть в диапазоне [0.0001, 0.2]";
+        return false;
+    }
+
+    if (options.transientHysteresis < 0.0 || options.transientHysteresis > 0.1) {
+        error = "--transient-hysteresis должен быть в диапазоне [0, 0.1]";
+        return false;
+    }
+
+    if (options.transientAttackMs < 1 || options.transientAttackMs > 200) {
+        error = "--transient-attack-ms должен быть в диапазоне [1, 200]";
+        return false;
+    }
+
+    if (options.transientReleaseMs < 5 || options.transientReleaseMs > 1000) {
+        error = "--transient-release-ms должен быть в диапазоне [5, 1000]";
+        return false;
+    }
+
+    if (options.transientGain < 0.2 || options.transientGain > 3.0) {
+        error = "--transient-gain должен быть в диапазоне [0.2, 3.0]";
+        return false;
+    }
+
+    if (options.sustainGain < 0.2 || options.sustainGain > 3.0) {
+        error = "--sustain-gain должен быть в диапазоне [0.2, 3.0]";
+        return false;
+    }
+
+    if (options.transientShape < 0.0 || options.transientShape > 1.0) {
+        error = "--transient-shape должен быть в диапазоне [0, 1]";
+        return false;
+    }
+
+    if (options.sustainShape < 0.0 || options.sustainShape > 1.0) {
+        error = "--sustain-shape должен быть в диапазоне [0, 1]";
+        return false;
+    }
+
     if (options.switchMode != "timer" && options.switchMode != "entropy-triggered") {
         error = "Некорректный --switch-mode: " + options.switchMode +
                 " (поддерживается: timer|entropy-triggered)";
@@ -857,6 +953,14 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.ghostDepth = options.ghostDepth;
     config.ghostDecay = options.ghostDecay;
     config.ghostGrainMs = options.ghostGrainMs;
+    config.transientThreshold = options.transientThreshold;
+    config.transientHysteresis = options.transientHysteresis;
+    config.transientAttackMs = options.transientAttackMs;
+    config.transientReleaseMs = options.transientReleaseMs;
+    config.transientGain = options.transientGain;
+    config.sustainGain = options.sustainGain;
+    config.transientShape = options.transientShape;
+    config.sustainShape = options.sustainShape;
     config.switchMode = options.switchMode;
     config.mixMode = options.mixMode;
     config.entropyDeltaUp = options.entropyDeltaUp;

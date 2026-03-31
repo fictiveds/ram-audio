@@ -1115,6 +1115,98 @@ private:
     bool sceneActive_;
 };
 
+class TransientSustainSplit final {
+public:
+    TransientSustainSplit(int sampleRate,
+                          double threshold,
+                          double hysteresis,
+                          int attackMs,
+                          int releaseMs,
+                          double transientGain,
+                          double sustainGain,
+                          double transientShape,
+                          double sustainShape)
+        : sampleRate_(std::max(1, sampleRate)),
+          threshold_(std::max(0.0001, threshold)),
+          hysteresis_(std::max(0.0, hysteresis)),
+          attackCoeff_(std::exp(-1.0 / (std::max(1, attackMs) * 0.001 * static_cast<double>(sampleRate_)))),
+          releaseCoeff_(std::exp(-1.0 / (std::max(1, releaseMs) * 0.001 * static_cast<double>(sampleRate_)))),
+          transientGain_(std::clamp(transientGain, 0.2, 3.0)),
+          sustainGain_(std::clamp(sustainGain, 0.2, 3.0)),
+          transientShape_(std::clamp(transientShape, 0.0, 1.0)),
+          sustainShape_(std::clamp(sustainShape, 0.0, 1.0)),
+          env_(0.0),
+          prevSample_(0.0),
+          transientMask_(0.0),
+          transientOn_(false) {}
+
+    double process(double input) {
+        const double x = std::isfinite(input) ? input : 0.0;
+        const double diff = std::fabs(x - prevSample_) / 32768.0;
+        prevSample_ = x;
+
+        const double coeff = (diff > env_) ? attackCoeff_ : releaseCoeff_;
+        env_ = coeff * env_ + (1.0 - coeff) * diff;
+
+        const double onThr = threshold_ + hysteresis_;
+        const double offThr = std::max(0.0, threshold_ - hysteresis_);
+        if (!transientOn_ && env_ >= onThr) {
+            transientOn_ = true;
+        } else if (transientOn_ && env_ <= offThr) {
+            transientOn_ = false;
+        }
+
+        const double targetMask = transientOn_ ? 1.0 : 0.0;
+        const double maskCoeff = transientOn_ ? attackCoeff_ : releaseCoeff_;
+        transientMask_ = maskCoeff * transientMask_ + (1.0 - maskCoeff) * targetMask;
+        transientMask_ = std::clamp(transientMask_, 0.0, 1.0);
+
+        const double transient = x * transientMask_;
+        const double sustain = x - transient;
+
+        const double transientShaped = shapeTransient(transient, transientShape_);
+        const double sustainShaped = shapeSustain(sustain, sustainShape_);
+
+        const double out = transientShaped * transientGain_ + sustainShaped * sustainGain_;
+        return std::clamp(out, -32000.0, 32000.0);
+    }
+
+private:
+    static double shapeTransient(double x, double amount) {
+        if (amount <= 0.0) {
+            return x;
+        }
+        const double xn = x / 32768.0;
+        const double drive = 1.0 + amount * 7.0;
+        const double y = std::tanh(xn * drive) / (1.0 + amount * 0.15);
+        return std::clamp(y * 32768.0, -32000.0, 32000.0);
+    }
+
+    static double shapeSustain(double x, double amount) {
+        if (amount <= 0.0) {
+            return x;
+        }
+        const double xn = x / 32768.0;
+        const double harmonic = std::sin(xn * kPi * (1.0 + amount * 2.0)) * (0.16 * amount);
+        const double y = xn * (1.0 - 0.35 * amount) + harmonic;
+        return std::clamp(y * 32768.0, -32000.0, 32000.0);
+    }
+
+    int sampleRate_;
+    double threshold_;
+    double hysteresis_;
+    double attackCoeff_;
+    double releaseCoeff_;
+    double transientGain_;
+    double sustainGain_;
+    double transientShape_;
+    double sustainShape_;
+    double env_;
+    double prevSample_;
+    double transientMask_;
+    bool transientOn_;
+};
+
 }  // namespace
 
 RamAudioEngine::SynthVoice::SynthVoice(std::unique_ptr<IRamAlgorithm> algorithm,
@@ -1490,6 +1582,15 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                                 config_.ghostDepth,
                                 config_.ghostDecay,
                                 config_.ghostGrainMs);
+    TransientSustainSplit transientSplit(config_.sampleRate,
+                                         config_.transientThreshold,
+                                         config_.transientHysteresis,
+                                         config_.transientAttackMs,
+                                         config_.transientReleaseMs,
+                                         config_.transientGain,
+                                         config_.sustainGain,
+                                         config_.transientShape,
+                                         config_.sustainShape);
 
     const int crossfadeSamples = std::max(
         0,
@@ -1672,6 +1773,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         }
 
         smoothedSample = ghostBlend.process(smoothedSample, i);
+        smoothedSample = transientSplit.process(smoothedSample);
 
         telemetry.pushSample(smoothedSample, i);
         sceneState.telemetry = telemetry.metrics();
