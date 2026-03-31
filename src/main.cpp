@@ -37,6 +37,12 @@ struct CliOptions {
     double targetRms = 9000.0;
     double limiterCeiling = 28000.0;
     double limiterMaxGain = 1.8;
+    int minSceneTimeSec = 8;
+    int crossfadeMs = 140;
+    double switchProbBase = 0.22;
+    double switchProbEnergyWeight = 0.28;
+    double switchProbNoveltyWeight = 0.36;
+    double switchProbHysteresis = 0.08;
     unsigned int seed = 0;
     bool verbose = true;
     bool listAlgorithms = false;
@@ -171,6 +177,12 @@ void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
         << "  --target-rms <v>           целевой RMS мастера (по умолчанию 9000)\n"
         << "  --limiter-ceiling <v>      ceiling мягкого лимитера (по умолчанию 28000)\n"
         << "  --limiter-max-gain <v>     максимум makeup gain лимитера (по умолчанию 1.8)\n"
+        << "  --min-scene-time <sec>     минимальная длительность сцены (по умолчанию 8)\n"
+        << "  --crossfade-ms <ms>        длительность crossfade (по умолчанию 140)\n"
+        << "  --switch-prob-base <v>     базовая вероятность switch [0..1] (по умолчанию 0.22)\n"
+        << "  --switch-prob-energy <v>   вес energy в switch-prob [0..1] (по умолчанию 0.28)\n"
+        << "  --switch-prob-novelty <v>  вес novelty в switch-prob [0..1] (по умолчанию 0.36)\n"
+        << "  --switch-prob-hyst <v>     hysteresis для switch-prob [0..1] (по умолчанию 0.08)\n"
         << "  --list-algorithms          показать доступные алгоритмы\n"
         << "  --seed <num>               фиксировать seed (0 = случайный)\n"
         << "  --quiet                    отключить лог прогресса\n"
@@ -312,6 +324,36 @@ bool parseCli(int argc,
                 error = "Некорректное значение --limiter-max-gain";
                 return false;
             }
+        } else if (isFlag(arg, "--min-scene-time")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.minSceneTimeSec)) {
+                error = "Некорректное значение --min-scene-time";
+                return false;
+            }
+        } else if (isFlag(arg, "--crossfade-ms")) {
+            if (!requireValue(arg, value) || !parseInt(value, options.crossfadeMs)) {
+                error = "Некорректное значение --crossfade-ms";
+                return false;
+            }
+        } else if (isFlag(arg, "--switch-prob-base")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.switchProbBase)) {
+                error = "Некорректное значение --switch-prob-base";
+                return false;
+            }
+        } else if (isFlag(arg, "--switch-prob-energy")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.switchProbEnergyWeight)) {
+                error = "Некорректное значение --switch-prob-energy";
+                return false;
+            }
+        } else if (isFlag(arg, "--switch-prob-novelty")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.switchProbNoveltyWeight)) {
+                error = "Некорректное значение --switch-prob-novelty";
+                return false;
+            }
+        } else if (isFlag(arg, "--switch-prob-hyst")) {
+            if (!requireValue(arg, value) || !parseDouble(value, options.switchProbHysteresis)) {
+                error = "Некорректное значение --switch-prob-hyst";
+                return false;
+            }
         } else if (isFlag(arg, "--min-voices")) {
             if (!requireValue(arg, value) || !parseInt(value, options.minVoices)) {
                 error = "Некорректное значение --min-voices";
@@ -430,6 +472,37 @@ bool parseCli(int argc,
         return false;
     }
 
+    if (options.minSceneTimeSec < 0 || options.minSceneTimeSec > 300) {
+        error = "--min-scene-time должен быть в диапазоне [0, 300]";
+        return false;
+    }
+
+    if (options.crossfadeMs < 0 || options.crossfadeMs > 5000) {
+        error = "--crossfade-ms должен быть в диапазоне [0, 5000]";
+        return false;
+    }
+
+    auto inUnitRange = [](double v) {
+        return v >= 0.0 && v <= 1.0;
+    };
+
+    if (!inUnitRange(options.switchProbBase)) {
+        error = "--switch-prob-base должен быть в диапазоне [0, 1]";
+        return false;
+    }
+    if (!inUnitRange(options.switchProbEnergyWeight)) {
+        error = "--switch-prob-energy должен быть в диапазоне [0, 1]";
+        return false;
+    }
+    if (!inUnitRange(options.switchProbNoveltyWeight)) {
+        error = "--switch-prob-novelty должен быть в диапазоне [0, 1]";
+        return false;
+    }
+    if (!inUnitRange(options.switchProbHysteresis)) {
+        error = "--switch-prob-hyst должен быть в диапазоне [0, 1]";
+        return false;
+    }
+
     return true;
 }
 
@@ -454,6 +527,12 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.targetRms = options.targetRms;
     config.limiterCeiling = options.limiterCeiling;
     config.limiterMaxGain = options.limiterMaxGain;
+    config.minSceneTimeSec = options.minSceneTimeSec;
+    config.crossfadeMs = options.crossfadeMs;
+    config.switchProbBase = options.switchProbBase;
+    config.switchProbEnergyWeight = options.switchProbEnergyWeight;
+    config.switchProbNoveltyWeight = options.switchProbNoveltyWeight;
+    config.switchProbHysteresis = options.switchProbHysteresis;
     config.seed = options.seed;
     config.verbose = options.verbose;
     config.stopFlag = &gStopRequested;

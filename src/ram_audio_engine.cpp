@@ -311,6 +311,106 @@ private:
     double releaseCoeff_;
 };
 
+class ProbabilisticCrossfadeSwitchPolicy final : public ISwitchPolicy {
+public:
+    ProbabilisticCrossfadeSwitchPolicy(std::mt19937& rng,
+                                       std::shared_ptr<ISwitchPolicy> basePolicy,
+                                       int minSceneTimeSec,
+                                       double baseProbability,
+                                       double energyWeight,
+                                       double noveltyWeight,
+                                       double hysteresis,
+                                       int sampleRate)
+        : rng_(rng),
+          basePolicy_(std::move(basePolicy)),
+          minSceneSamples_(std::max(0, minSceneTimeSec * std::max(1, sampleRate))),
+          baseProbability_(std::clamp(baseProbability, 0.0, 1.0)),
+          energyWeight_(std::clamp(energyWeight, 0.0, 1.0)),
+          noveltyWeight_(std::clamp(noveltyWeight, 0.0, 1.0)),
+          hysteresis_(std::clamp(hysteresis, 0.0, 1.0)),
+          switchArmed_(false) {}
+
+    SwitchDecision decide(const SceneState& scene,
+                          std::size_t activeVoices,
+                          int minVoices,
+                          int maxVoices,
+                          std::uint64_t memorySwitchTimer,
+                          std::uint64_t voiceSpawnTimer,
+                          bool hasSwitchCandidate,
+                          int candidatePid,
+                          double candidateEntropy) override {
+        if (!basePolicy_) {
+            return {};
+        }
+
+        SwitchDecision decision = basePolicy_->decide(scene,
+                                                      activeVoices,
+                                                      minVoices,
+                                                      maxVoices,
+                                                      memorySwitchTimer,
+                                                      voiceSpawnTimer,
+                                                      hasSwitchCandidate,
+                                                      candidatePid,
+                                                      candidateEntropy);
+
+        if (!decision.switchMemorySource) {
+            return decision;
+        }
+
+        const std::uint64_t sceneAge = scene.sampleIndex - scene.sceneStartSample;
+        if (sceneAge < static_cast<std::uint64_t>(minSceneSamples_)) {
+            decision.switchMemorySource = false;
+            return decision;
+        }
+
+        const double energyNorm = std::clamp(scene.telemetry.rms / 18000.0, 0.0, 1.0);
+        const double novelty = scene.telemetry.valid
+                                   ? (0.45 * scene.telemetry.spectralFlatness +
+                                      0.25 * scene.telemetry.zeroCrossingRate +
+                                      0.30 * scene.telemetry.transientDensity)
+                                   : 0.25;
+
+        const double probability = std::clamp(
+            baseProbability_ +
+                energyWeight_ * (1.0 - energyNorm) +
+                noveltyWeight_ * (1.0 - novelty),
+            0.0,
+            1.0);
+
+        const bool shouldArm = probability >= (0.5 + hysteresis_ * 0.5);
+        const bool shouldDisarm = probability <= std::max(0.0, 0.5 - hysteresis_ * 0.5);
+        if (shouldArm) {
+            switchArmed_ = true;
+        } else if (shouldDisarm) {
+            switchArmed_ = false;
+        }
+
+        if (!switchArmed_) {
+            decision.switchMemorySource = false;
+            return decision;
+        }
+
+        std::bernoulli_distribution coin(probability);
+        if (!coin(rng_)) {
+            decision.switchMemorySource = false;
+            return decision;
+        }
+
+        switchArmed_ = false;
+        return decision;
+    }
+
+private:
+    std::mt19937& rng_;
+    std::shared_ptr<ISwitchPolicy> basePolicy_;
+    int minSceneSamples_;
+    double baseProbability_;
+    double energyWeight_;
+    double noveltyWeight_;
+    double hysteresis_;
+    bool switchArmed_;
+};
+
 }  // namespace
 
 RamAudioEngine::SynthVoice::SynthVoice(std::unique_ptr<IRamAlgorithm> algorithm,
@@ -400,8 +500,9 @@ RamAudioEngine::RamAudioEngine(EngineConfig config, AlgorithmRegistry registry)
       switchPolicy_(config_.switchPolicy),
       mixPolicy_(config_.mixPolicy) {
     if (!switchPolicy_) {
+        std::shared_ptr<ISwitchPolicy> baseSwitch;
         if (config_.switchMode == "entropy-triggered") {
-            switchPolicy_ = std::make_shared<EntropyTriggeredSwitchPolicy>(
+            baseSwitch = std::make_shared<EntropyTriggeredSwitchPolicy>(
                 rng_,
                 config_.entropyDeltaUp,
                 config_.entropyDeltaDown,
@@ -409,8 +510,18 @@ RamAudioEngine::RamAudioEngine(EngineConfig config, AlgorithmRegistry registry)
                 config_.switchCooldownSec,
                 config_.sampleRate);
         } else {
-            switchPolicy_ = std::make_shared<TimerSwitchPolicy>(rng_);
+            baseSwitch = std::make_shared<TimerSwitchPolicy>(rng_);
         }
+
+        switchPolicy_ = std::make_shared<ProbabilisticCrossfadeSwitchPolicy>(
+            rng_,
+            baseSwitch,
+            config_.minSceneTimeSec,
+            config_.switchProbBase,
+            config_.switchProbEnergyWeight,
+            config_.switchProbNoveltyWeight,
+            config_.switchProbHysteresis,
+            config_.sampleRate);
     }
     if (!mixPolicy_) {
         mixPolicy_ = std::make_shared<SmoothedAverageMixPolicy>();
@@ -544,6 +655,15 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                                   config_.limiterMaxGain,
                                   config_.sampleRate);
 
+    const int crossfadeSamples = std::max(
+        0,
+        static_cast<int>((static_cast<long long>(config_.crossfadeMs) * config_.sampleRate) / 1000));
+    std::vector<double> crossfadeTail;
+    std::size_t crossfadeTailPos = 0;
+    if (crossfadeSamples > 0) {
+        crossfadeTail.assign(static_cast<std::size_t>(crossfadeSamples), 0.0);
+    }
+
     SceneState sceneState;
     sceneState.activePid = snapshot.pid;
     sceneState.activeProcessName = snapshot.processName;
@@ -594,6 +714,17 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         if (decision.switchMemorySource) {
             if (hasSwitchCandidate) {
                 const double prevEntropy = memoryEntropy;
+
+                if (crossfadeSamples > 0) {
+                    const std::size_t tailSize = static_cast<std::size_t>(crossfadeSamples);
+                    for (std::size_t k = 0; k < tailSize; ++k) {
+                        const std::size_t idx = (crossfadeTailPos + tailSize - 1U - k) % tailSize;
+                        crossfadeTail[k] = smoothedSample;
+                        (void)idx;
+                    }
+                    crossfadeTailPos = 0;
+                }
+
                 snapshot = std::move(switchCandidate);
                 memoryEntropy = candidateEntropy;
                 stats.memorySizeBytes = snapshot.bytes.size();
@@ -678,6 +809,15 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         smoothedSample = mixPolicy_->mix(sceneState, voiceDescriptors, voiceSamples, smoothedSample);
         if (!std::isfinite(smoothedSample)) {
             smoothedSample = 0.0;
+        }
+
+        if (crossfadeSamples > 0 && !crossfadeTail.empty() && crossfadeTailPos < crossfadeTail.size()) {
+            const double t = static_cast<double>(crossfadeTailPos + 1) /
+                             static_cast<double>(crossfadeTail.size());
+            const double fadeIn = t;
+            const double fadeOut = 1.0 - t;
+            smoothedSample = smoothedSample * fadeIn + crossfadeTail[crossfadeTailPos] * fadeOut;
+            ++crossfadeTailPos;
         }
 
         telemetry.pushSample(smoothedSample, i);

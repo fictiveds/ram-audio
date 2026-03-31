@@ -86,6 +86,12 @@ struct EngineConfig {
     double targetRms = 9000.0;
     double limiterCeiling = 28000.0;
     double limiterMaxGain = 1.8;
+    int minSceneTimeSec = 8;
+    int crossfadeMs = 140;
+    double switchProbBase = 0.22;
+    double switchProbEnergyWeight = 0.28;
+    double switchProbNoveltyWeight = 0.36;
+    double switchProbHysteresis = 0.08;
     unsigned int seed = 0;
     bool verbose = true;
     const volatile std::sig_atomic_t* stopFlag = nullptr;
