@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+enable_testing()
+
 add_executable(ram_audio
     src/main.cpp
     src/algorithms/core_registry.cpp
@@ -13,6 +15,7 @@ add_executable(ram_audio
     src/algorithms/texture_algorithms.cpp
     src/algorithms/advanced_algorithms.cpp
     src/algorithms/musical_algorithms.cpp
+    src/telemetry.cpp
     src/ram_audio_engine.cpp
     src/audio_io.cpp
 )
@@ -24,3 +27,18 @@ if(MSVC)
 else()
     target_compile_options(ram_audio PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+add_executable(ram_audio_telemetry_test
+    tests/telemetry_test.cpp
+    src/telemetry.cpp
+)
+
+target_include_directories(ram_audio_telemetry_test PRIVATE src)
+
+if(MSVC)
+    target_compile_options(ram_audio_telemetry_test PRIVATE /W4)
+else()
+    target_compile_options(ram_audio_telemetry_test PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_test(NAME telemetry_ranges COMMAND ram_audio_telemetry_test)

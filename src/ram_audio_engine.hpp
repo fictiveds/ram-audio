@@ -2,6 +2,7 @@
 #define RAM_AUDIO_ENGINE_HPP
 
 #include "algorithms.hpp"
+#include "telemetry.hpp"
 
 #include <csignal>
 #include <cstddef>
@@ -32,6 +33,7 @@ struct SceneState {
     int activePid = -1;
     std::string activeProcessName;
     double macroMod = 0.0;
+    TelemetryMetrics telemetry;
 };
 
 struct SwitchDecision {

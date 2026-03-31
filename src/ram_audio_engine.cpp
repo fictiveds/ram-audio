@@ -355,6 +355,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
     int silenceSamples = 0;
     const double silenceEnergyThreshold = 18000.0;
     const int silenceRecoverySamples = std::max(1, config_.sampleRate / 3);
+    AudioTelemetry telemetry(config_.sampleRate, 4096, 512);
 
     SceneState sceneState;
     sceneState.activePid = snapshot.pid;
@@ -467,6 +468,9 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         if (!std::isfinite(smoothedSample)) {
             smoothedSample = 0.0;
         }
+
+        telemetry.pushSample(smoothedSample, i);
+        sceneState.telemetry = telemetry.metrics();
 
         const double currentEnergy = smoothedSample * smoothedSample;
         energyEma = (energyEma * 0.9992) + (currentEnergy * 0.0008);
