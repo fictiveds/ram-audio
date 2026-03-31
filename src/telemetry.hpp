@@ -41,6 +41,9 @@ private:
     std::vector<double> cosTable_;
     std::vector<double> sinTable_;
     std::vector<double> binFreqsHz_;
+    std::vector<double> diffsScratch_;
+    std::size_t spectralUpdateStride_;
+    std::size_t spectralUpdateCounter_;
     std::size_t writePos_;
     std::size_t filled_;
     std::size_t samplesSinceUpdate_;

@@ -40,6 +40,9 @@ AudioTelemetry::AudioTelemetry(int sampleRate, std::size_t windowSize, std::size
       cosTable_(),
       sinTable_(),
       binFreqsHz_(),
+      diffsScratch_(),
+      spectralUpdateStride_(4),
+      spectralUpdateCounter_(0),
       writePos_(0),
       filled_(0),
       samplesSinceUpdate_(0),
@@ -54,10 +57,12 @@ AudioTelemetry::AudioTelemetry(int sampleRate, std::size_t windowSize, std::size
     if (spectralBins_ < 4) {
         spectralBins_ = 4;
     }
+    spectralUpdateStride_ = std::max<std::size_t>(1, hopSize_ / 128);
 
     orderedWindow_.reserve(windowSize_);
     spectralWindow_.resize(spectralSize_, 0.0);
     hannWindow_.resize(spectralSize_, 0.0);
+    diffsScratch_.reserve(windowSize_ > 1 ? windowSize_ - 1 : 1);
 
     initSpectralTables();
 }
@@ -133,8 +138,8 @@ void AudioTelemetry::computeMetrics(std::uint64_t sampleIndex) {
     double energySum = 0.0;
     std::size_t zcrCrossings = 0;
     double diffSum = 0.0;
-    std::vector<double> diffs;
-    diffs.reserve(n - 1);
+    diffsScratch_.clear();
+    diffsScratch_.reserve(n - 1);
 
     for (std::size_t i = 0; i < n; ++i) {
         const double s = window[i];
@@ -147,7 +152,7 @@ void AudioTelemetry::computeMetrics(std::uint64_t sampleIndex) {
             }
 
             const double diff = std::fabs(s - prev);
-            diffs.push_back(diff);
+            diffsScratch_.push_back(diff);
             diffSum += diff;
         }
     }
@@ -155,54 +160,61 @@ void AudioTelemetry::computeMetrics(std::uint64_t sampleIndex) {
     const double rms = std::sqrt(energySum / static_cast<double>(n));
     const double zcr = static_cast<double>(zcrCrossings) / static_cast<double>(n - 1);
 
-    const double meanDiff = diffSum / static_cast<double>(std::max<std::size_t>(1, diffs.size()));
+    const double meanDiff = diffSum / static_cast<double>(std::max<std::size_t>(1, diffsScratch_.size()));
     const double transientThreshold = meanDiff * 2.4;
     std::size_t transientCount = 0;
-    for (double diff : diffs) {
+    for (double diff : diffsScratch_) {
         if (diff > transientThreshold) {
             ++transientCount;
         }
     }
-    const double transientDensity = static_cast<double>(transientCount) / static_cast<double>(std::max<std::size_t>(1, diffs.size()));
+    const double transientDensity = static_cast<double>(transientCount) /
+                                    static_cast<double>(std::max<std::size_t>(1, diffsScratch_.size()));
 
-    for (std::size_t i = 0; i < spectralSize_; ++i) {
-        const std::size_t src = std::min<std::size_t>(n - 1, i * spectralStride_);
-        spectralWindow_[i] = window[src] * hannWindow_[i];
-    }
+    ++spectralUpdateCounter_;
+    if (spectralUpdateCounter_ >= spectralUpdateStride_ || !metrics_.valid) {
+        spectralUpdateCounter_ = 0;
 
-    double magnitudeSum = 0.0;
-    double weightedFreqSum = 0.0;
-    double logMagnitudeSum = 0.0;
-
-    for (std::size_t band = 0; band < spectralBins_; ++band) {
-        const std::size_t base = band * spectralSize_;
-        double re = 0.0;
-        double im = 0.0;
         for (std::size_t i = 0; i < spectralSize_; ++i) {
-            const double s = spectralWindow_[i];
-            re += s * cosTable_[base + i];
-            im -= s * sinTable_[base + i];
+            const std::size_t src = std::min<std::size_t>(n - 1, i * spectralStride_);
+            spectralWindow_[i] = window[src] * hannWindow_[i];
         }
 
-        const double magnitude = std::sqrt(re * re + im * im) + kEpsilon;
-        const double freqHz = binFreqsHz_[band];
+        double magnitudeSum = 0.0;
+        double weightedFreqSum = 0.0;
+        double logMagnitudeSum = 0.0;
 
-        magnitudeSum += magnitude;
-        weightedFreqSum += magnitude * freqHz;
-        logMagnitudeSum += std::log(magnitude);
+        for (std::size_t band = 0; band < spectralBins_; ++band) {
+            const std::size_t base = band * spectralSize_;
+            double re = 0.0;
+            double im = 0.0;
+            for (std::size_t i = 0; i < spectralSize_; ++i) {
+                const double s = spectralWindow_[i];
+                re += s * cosTable_[base + i];
+                im -= s * sinTable_[base + i];
+            }
+
+            const double magnitude = std::sqrt(re * re + im * im) + kEpsilon;
+            const double freqHz = binFreqsHz_[band];
+
+            magnitudeSum += magnitude;
+            weightedFreqSum += magnitude * freqHz;
+            logMagnitudeSum += std::log(magnitude);
+        }
+
+        const double centroidHz = magnitudeSum > kEpsilon
+                                      ? weightedFreqSum / magnitudeSum
+                                      : 0.0;
+
+        const double arithMean = magnitudeSum / static_cast<double>(std::max<std::size_t>(1, spectralBins_));
+        const double geoMean = std::exp(logMagnitudeSum / static_cast<double>(std::max<std::size_t>(1, spectralBins_)));
+        const double flatness = arithMean > kEpsilon ? geoMean / arithMean : 0.0;
+
+        metrics_.spectralCentroidHz = clampDouble(centroidHz, 0.0, static_cast<double>(sampleRate_) * 0.5);
+        metrics_.spectralFlatness = clampDouble(flatness, 0.0, 1.0);
     }
 
-    const double centroidHz = magnitudeSum > kEpsilon
-                                  ? weightedFreqSum / magnitudeSum
-                                  : 0.0;
-
-    const double arithMean = magnitudeSum / static_cast<double>(std::max<std::size_t>(1, spectralBins_));
-    const double geoMean = std::exp(logMagnitudeSum / static_cast<double>(std::max<std::size_t>(1, spectralBins_)));
-    const double flatness = arithMean > kEpsilon ? geoMean / arithMean : 0.0;
-
     metrics_.rms = rms;
-    metrics_.spectralCentroidHz = clampDouble(centroidHz, 0.0, static_cast<double>(sampleRate_) * 0.5);
-    metrics_.spectralFlatness = clampDouble(flatness, 0.0, 1.0);
     metrics_.zeroCrossingRate = clampDouble(zcr, 0.0, 1.0);
     metrics_.transientDensity = clampDouble(transientDensity, 0.0, 1.0);
     metrics_.windowSize = n;
