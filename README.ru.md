@@ -2,6 +2,11 @@
 
 [English version](README.md)
 
+## Ссылки
+
+- Telegram-канал: [@fictive_dsp](https://t.me/fictive_dsp)
+- Личный профиль: [@fictive_ds](https://t.me/fictive_ds)
+
 RAM Audio - это Linux-приложение командной строки, которое преобразует снимки памяти запущенных процессов в процедурный звук.
 
 > [!IMPORTANT]

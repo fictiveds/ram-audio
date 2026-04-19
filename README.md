@@ -2,6 +2,11 @@
 
 [Russian version](README.ru.md)
 
+## Links
+
+- Telegram channel: [@fictive_dsp](https://t.me/fictive_dsp)
+- Personal profile: [@fictive_ds](https://t.me/fictive_ds)
+
 RAM Audio is a Linux-native command-line synthesizer that converts live process memory snapshots into procedural audio.
 
 > [!IMPORTANT]
