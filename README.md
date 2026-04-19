@@ -1,177 +1,248 @@
-# RAM Audio (C++)
+# RAM Audio
 
-Порт `real_ram_audio.py` на C++ с двумя режимами вывода:
+[Russian version](README.ru.md)
 
-- `file` - генерация и сохранение в WAV-файл.
-- `stream` - непрерывный RAW PCM поток в `stdout` (удобно для пайпа в плеер/энкодер).
+RAM Audio is a Linux-native command-line synthesizer that converts live process memory snapshots into procedural audio.
 
-Также добавлены:
+> [!IMPORTANT]
+> - Current support: **Linux only**.
+> - Runtime requires **superuser privileges** (`sudo` or root) because the engine reads `/proc/<pid>/mem` and `/proc/<pid>/maps`.
+> - `--help` and `--list-algorithms` can run without root.
 
-- параметры командной строки;
-- реестр алгоритмов для простого расширения синтеза;
-- сборка через CMake.
+## Features
 
-## Требования
+- C++17 audio engine with a pluggable algorithm registry.
+- Two output modes: WAV file export and real-time raw PCM streaming.
+- Fine-grained controls for voices, scheduling, scene switching, modulation, novelty guard, and band split.
+- Deterministic runs with `--seed`.
+- CMake-based build and a telemetry test target.
 
-- Linux (`/proc/<pid>/mem`, `/proc/<pid>/maps`)
-- CMake 3.16+
-- Компилятор с поддержкой C++17 (GCC/Clang)
-- root/sudo для чтения памяти процессов
+## Requirements
 
-## Сборка
+- Linux with `/proc` process memory interfaces available.
+- CMake 3.16 or newer.
+- GCC or Clang with C++17 support.
+- Optional tools for stream playback: `ffplay` (FFmpeg) or `aplay` (ALSA).
+
+## Build From Source
 
 ```bash
-cmake -S . -B build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
+ctest --test-dir build --output-on-failure
 ```
 
-Бинарник: `build/ram_audio`
+Build outputs:
 
-## Быстрый запуск
+- `build/ram_audio` - main application.
+- `build/ram_audio_telemetry_test` - telemetry test binary.
 
-### 1) Режим сохранения в WAV
+## Run
+
+Command pattern:
 
 ```bash
-sudo ./build/ram_audio --mode file --output real_ram_symphony_cpp.wav --duration 180
+sudo ./build/ram_audio [options]
 ```
 
-### 2) Режим стрима (RAW PCM S16LE, mono)
+### Mode: `file` (WAV export)
 
 ```bash
-sudo -k && sudo --prompt='[sudo] Пароль для %u: ' -v && (sudo ./build/ram_audio --mode stream --duration 60 --sample-rate 44100 --buffer-ms 1000 | ffplay -hide_banner -nostats -loglevel warning -f s16le -ar 44100 -ch_layout mono -)
+sudo ./build/ram_audio --mode file --output real_ram_symphony.wav --duration 180
 ```
 
-`sudo -k` сбрасывает кэш прав, `sudo -v` сначала показывает prompt пароля, и только после этого запускается `ffplay`.
-
-### 3) Бесконечный стрим (до Ctrl+C)
+### Mode: `stream` (raw PCM to stdout, finite)
 
 ```bash
-sudo -k && sudo --prompt='[sudo] Пароль для %u: ' -v && (sudo ./build/ram_audio --mode stream --infinite --sample-rate 44100 --buffer-ms 1000 | ffplay -hide_banner -nostats -loglevel warning -f s16le -ar 44100 -ch_layout mono -)
+sudo ./build/ram_audio --mode stream --duration 60 --sample-rate 44100 | ffplay -f s16le -ar 44100 -ac 1 -
 ```
 
-Для снижения underrun можно увеличить буфер:
+### Mode: `stream` (raw PCM to stdout, infinite)
 
 ```bash
-sudo ./build/ram_audio --mode stream --infinite --sample-rate 44100 --buffer-ms 1000 | aplay -f S16_LE -r 44100 -c 1
+sudo ./build/ram_audio --mode stream --infinite --buffer-ms 1000 --sample-rate 44100 | aplay -f S16_LE -r 44100 -c 1
 ```
 
-Альтернатива через ALSA:
+### Show algorithms
 
 ```bash
-sudo ./build/ram_audio --mode stream --duration 60 --sample-rate 44100 | aplay -f S16_LE -r 44100 -c 1
+./build/ram_audio --list-algorithms
 ```
 
-## Параметры CLI
+### Algorithm selection examples
 
-Посмотреть все опции:
+Use comma-separated IDs in `--algorithms` (no spaces).
+
+Single algorithm (infinite stream):
 
 ```bash
-./build/ram_audio --help
+sudo ./build/ram_audio --mode stream --infinite --buffer-ms 900 --algorithms chaotic_lorenz_fm | aplay -f S16_LE -r 44100 -c 1
 ```
 
-Основные параметры:
-
-- `--mode file|stream` - режим вывода.
-- `--output <path>` - путь WAV-файла (для `file`).
-- `--duration <sec>` - длительность генерации.
-- `--infinite` - бесконечная генерация до `Ctrl+C` (только `--mode stream`).
-- `--sample-rate <hz>` - частота дискретизации.
-- `--buffer-ms <ms>` - буфер stream-вывода в миллисекундах (`0` отключает буфер).
-- `--max-memory-mb <mb>` - лимит считанной памяти процесса.
-- `--algorithms <a,b,c>` - ограничить набор алгоритмов по ID.
-- `--list-algorithms` - вывести доступные алгоритмы.
-- `--seed <num>` - фиксированный seed для повторяемости.
-- `--quiet` - отключить прогресс-лог.
-
-Параметры полифонии/таймингов:
-
-- `--min-voices`, `--max-voices`
-- `--memory-switch-min`, `--memory-switch-max`
-- `--voice-spawn-min`, `--voice-spawn-max`
-
-## Архитектура
-
-- `src/ram_audio_engine.*` - движок чтения памяти процессов, управление голосами, микширование.
-- `src/algorithms.hpp` - интерфейс алгоритма и публичный реестр.
-- `src/algorithms/` - реализации и регистрация алгоритмов по группам:
-  - `core_registry.cpp` - реализация реестра;
-  - `classic_algorithms.cpp` - базовые алгоритмы;
-  - `texture_algorithms.cpp` - текстурные/шумовые;
-  - `advanced_algorithms.cpp` - продвинутые спектральные/моделирующие;
-  - `musical_algorithms.cpp` - микротональные/полиметрические музыкальные;
-  - `common.hpp` - общие helper-функции для алгоритмов.
-- `src/audio_io.*` - sink-ы вывода: WAV и RAW stream.
-- `src/main.cpp` - CLI, валидация опций, запуск движка.
-
-## Как добавить новый алгоритм
-
-1. Реализуйте класс от `IRamAlgorithm` в `src/algorithms.cpp`:
-   - `id()`
-   - `generate(...)`
-   - `onMemorySizeChanged(...)`
-
-2. Зарегистрируйте фабрику в `createDefaultAlgorithmRegistry()`:
-
-```cpp
-registry.registerAlgorithm({
-    "my_algorithm",
-    "My Algorithm",
-    [](std::size_t memorySize, int sampleRate, std::mt19937& rng) {
-        return std::make_unique<MyAlgorithm>(memorySize, sampleRate, rng);
-    },
-});
-```
-
-3. Пересоберите проект. Новый ID сразу доступен в `--list-algorithms` и `--algorithms`.
-
-## Важно
-
-- Без root/sudo доступ к `/proc/*/mem` чаще всего будет запрещен.
-- Стрим-режим выводит бинарный поток PCM в `stdout`, лог пишется в `stderr`.
-- При `--mode stream` используется буферизованный вывод (по умолчанию `500 ms`), это уменьшает вероятность underrun в `aplay`.
-
-## Новые алгоритмы
-
-Добавлены дополнительные источники более необычного звука:
-
-- `chaotic_lorenz_fm` - хаотический FM на основе аттрактора Лоренца.
-- `pointer_walk_melody` - мелодический random-walk указателя по памяти.
-- `granular_freeze_scrub` - гранулярный freeze/scrub из окон RAM.
-- `cellular_automata_noise` - шум и ритм на базе эволюции клеточного автомата.
-- `resonator_bank_entropy` - резонаторный тон под управлением энтропии RAM-окон.
-- `ring_mod_bitplanes` - ring-mod синтез старших/младших битплейнов.
-- `karplus_ram_string` - струнный Karplus-Strong с возбуждением из RAM.
-- `fractal_byte_terrain` - фрактальный terrain-осциллятор с RAM-модуляцией.
-- `microtonal_glitch_grid` - микротональная сетка с нерегулярным шагом и глитч-квантованием.
-- `polymeter_euclidean_micro` - полиметрические Euclidean-паттерны с 31/19-EDO высотами.
-- `tritave_odd_meter_chords` - аккордовые события в 13-ступенном tritave и нечётных размерах.
-
-Использование только новых алгоритмов:
+Microtonal/melodic set:
 
 ```bash
-sudo ./build/ram_audio --mode stream --infinite --algorithms chaotic_lorenz_fm,pointer_walk_melody,granular_freeze_scrub | aplay -f S16_LE -r 44100 -c 1
+sudo ./build/ram_audio --mode stream --infinite --buffer-ms 1000 --algorithms microtonal_glitch_grid,polymeter_euclidean_micro,tritave_odd_meter_chords,pointer_walk_melody | aplay -f S16_LE -r 44100 -c 1
 ```
 
-Экстремальный микс из всех экспериментальных алгоритмов:
+Rhythmic/noise set:
 
 ```bash
-sudo ./build/ram_audio --mode stream --infinite --buffer-ms 1200 --algorithms chaotic_lorenz_fm,pointer_walk_melody,granular_freeze_scrub,cellular_automata_noise,resonator_bank_entropy,ring_mod_bitplanes,karplus_ram_string,fractal_byte_terrain,microtonal_glitch_grid,polymeter_euclidean_micro,tritave_odd_meter_chords | aplay -f S16_LE -r 44100 -c 1
+sudo ./build/ram_audio --mode stream --infinite --buffer-ms 1000 --algorithms percussive_rhythm_triggers,cellular_automata_noise,ring_mod_bitplanes,spectral_hole_puncher | aplay -f S16_LE -r 44100 -c 1
 ```
 
-Более музыкальный IDM/микротональный набор:
+Spectral/feedback-heavy set:
 
 ```bash
-sudo ./build/ram_audio --mode stream --infinite --buffer-ms 1000 --algorithms microtonal_glitch_grid,polymeter_euclidean_micro,tritave_odd_meter_chords,pointer_walk_melody,granular_freeze_scrub | aplay -f S16_LE -r 44100 -c 1
+sudo ./build/ram_audio --mode stream --infinite --buffer-ms 1200 --algorithms fdn_prime_feedback,spectral_freeze_permuter,modal_mesh_exciter,inharmonic_resonator_swarm | aplay -f S16_LE -r 44100 -c 1
 ```
 
-sudo ./build/ram_audio --mode file --output real_ram_symphony_cpp.wav --duration 300 --buffer-ms 1000 --algorithms microtonal_glitch_grid,polymeter_euclidean_micro,tritave_odd_meter_chords,pointer_walk_melody,granular_freeze_scrub | aplay -f S16_LE -r 44100 -c 1
+WAV export with a curated set:
 
-sudo ./build/ram_audio --mode file --output real_ram_symphony_cpp.wav --duration 300 --buffer-ms 1200 --algorithms chaotic_lorenz_fm,pointer_walk_melody,granular_freeze_scrub,cellular_automata_noise,resonator_bank_entropy,ring_mod_bitplanes,karplus_ram_string,fractal_byte_terrain,microtonal_glitch_grid,polymeter_euclidean_micro,tritave_odd_meter_chords | aplay -f S16_LE -r 44100 -c 1
+```bash
+sudo ./build/ram_audio --mode file --output ram_audio_curated.wav --duration 240 --algorithms pointer_walk_melody,granular_freeze_scrub,ram_wavelet_scanner,bytebeat_formula_evolver
+```
 
-## Защита от тишины
+Reproducible render (fixed seed):
 
-В движок добавлен anti-silence guard:
+```bash
+sudo ./build/ram_audio --mode file --output ram_audio_seed42.wav --duration 180 --seed 42 --algorithms chaotic_lorenz_fm,fractal_byte_terrain,karplus_ram_string
+```
 
-- постоянный `anchor`-голос (не умирает, только плавно входит);
-- RMS-проверка энергии микса;
-- автоматический аварийный спавн голосов при длительном провале плотности.
+## Supported Modes
+
+- Output mode (`--mode`): `file`, `stream`.
+- Timing mode (`--timing-mode`): `uniform`, `lognormal`, `powerlaw`, `auto`.
+- Scene switch mode (`--switch-mode`): `timer`, `entropy-triggered`.
+- Mix mode (`--mix-mode`): `smoothed` (currently the only implementation).
+
+## Full CLI Reference
+
+### Core I/O and execution
+
+- `--help`, `-h` - print help and exit.
+- `--quiet`, `-q` - disable progress logs.
+- `--mode`, `-m` (`file` or `stream`, default `file`) - select output mode.
+- `--output`, `-o` (default `real_ram_symphony.wav`) - WAV file path for `file` mode.
+- `--duration`, `-d` (default `180`) - generation length in seconds (`> 0` when not using `--infinite`).
+- `--infinite` - run until interrupted (`Ctrl+C`), valid only with `--mode stream`.
+- `--sample-rate`, `-r` (default `44100`) - sample rate in Hz.
+- `--buffer-ms` (default `500`) - stream buffer in milliseconds (`0` disables buffering).
+- `--max-memory-mb` (default `60`) - maximum memory snapshot size per process.
+- `--algorithms <id1,id2,...>` - restrict algorithm pool to specific IDs.
+- `--list-algorithms` - print available algorithms and exit.
+- `--seed` (default `0`) - fixed RNG seed (`0` means random seed).
+
+### Polyphony and scheduler intervals
+
+- `--min-voices` (default `2`) - minimum active voices (`> 0`).
+- `--max-voices` (default `6`) - maximum active voices (`> 0`, `>= min-voices`).
+- `--memory-switch-min` (default `15`) - minimum seconds between process switches (`> 0`).
+- `--memory-switch-max` (default `40`) - maximum seconds between process switches (`> 0`, `>= memory-switch-min`).
+- `--voice-spawn-min` (default `2`) - minimum seconds between voice spawns (`> 0`).
+- `--voice-spawn-max` (default `8`) - maximum seconds between voice spawns (`> 0`, `>= voice-spawn-min`).
+
+### Timing and genetic behavior
+
+- `--timing-mode` (default `uniform`) - `uniform`, `lognormal`, `powerlaw`, or `auto`.
+- `--timing-log-sigma` (default `0.60`) - range `[0.05, 2.5]`.
+- `--timing-power-alpha` (default `1.80`) - range `[1.05, 3.5]`.
+- `--timing-auto-chaos` (default `0.55`) - range `[0, 1]`.
+- `--genetic-mutation-rate` (default `0.28`) - range `[0, 1]`.
+- `--genetic-mutation-depth` (default `0.35`) - range `[0, 1]`.
+- `--genetic-algo-mutation` (default `0.18`) - range `[0, 1]`.
+
+### Modulation, ghost buffer, and transient shaping
+
+- `--mod-matrix-enable` - enable modulation matrix.
+- `--mod-matrix-depth` (default `0.22`) - range `[0, 1]`.
+- `--mod-feedback-limit` (default `0.55`) - range `[0, 0.95]`.
+- `--mod-wavefold` (default `0.18`) - range `[0, 1]`.
+- `--ghost-depth` (default `0.20`) - range `[0, 1]`.
+- `--ghost-decay` (default `0.996`) - range `[0.90, 0.9999]`.
+- `--ghost-grain-ms` (default `60`) - range `[5, 4000]`.
+- `--transient-threshold` (default `0.010`) - range `[0.0001, 0.2]`.
+- `--transient-hysteresis` (default `0.004`) - range `[0, 0.1]`.
+- `--transient-attack-ms` (default `5`) - range `[1, 200]`.
+- `--transient-release-ms` (default `70`) - range `[5, 1000]`.
+- `--transient-gain` (default `1.12`) - range `[0.2, 3.0]`.
+- `--sustain-gain` (default `0.94`) - range `[0.2, 3.0]`.
+- `--transient-shape` (default `0.35`) - range `[0, 1]`.
+- `--sustain-shape` (default `0.20`) - range `[0, 1]`.
+
+### Scene switching, novelty control, and loudness
+
+- `--switch-mode` (default `timer`) - `timer` or `entropy-triggered`.
+- `--mix-mode` (default `smoothed`) - currently only `smoothed`.
+- `--entropy-delta-up` (default `0.015`) - range `(0, 1)`.
+- `--entropy-delta-down` (default `0.015`) - range `(0, 1)`.
+- `--entropy-hysteresis` (default `0.004`) - range `[0, 0.25)`.
+- `--switch-cooldown` (default `2`) - range `[0, +inf)`.
+- `--scene-macro-min` (default `30`) - minimum macro-scene duration in seconds (`> 0`).
+- `--scene-macro-max` (default `180`) - maximum macro-scene duration in seconds (`> 0`, `>= scene-macro-min`).
+- `--scene-micro-min` (default `300`) - minimum micro-phase duration in ms (`> 0`).
+- `--scene-micro-max` (default `4000`) - maximum micro-phase duration in ms (`> 0`, `>= scene-micro-min`).
+- `--target-rms` (default `9000`) - range `(100, 20000]`.
+- `--limiter-ceiling` (default `28000`) - range `(1000, 32767]`.
+- `--limiter-max-gain` (default `1.8`) - range `[0.25, 4.0]`.
+- `--min-scene-time` (default `8`) - range `[0, 300]`.
+- `--crossfade-ms` (default `140`) - range `[0, 5000]`.
+- `--switch-prob-base` (default `0.22`) - range `[0, 1]`.
+- `--switch-prob-energy` (default `0.28`) - range `[0, 1]`.
+- `--switch-prob-novelty` (default `0.36`) - range `[0, 1]`.
+- `--switch-prob-hyst` (default `0.08`) - range `[0, 1]`.
+- `--hmm-tabu-window` (default `3`) - range `[0, 16]`.
+- `--hmm-novelty-bias` (default `0.22`) - range `[0, 1]`.
+- `--novelty-threshold` (default `0.93`) - range `[0, 1]`.
+- `--novelty-history` (default `48`) - range `[8, 4096]`.
+- `--novelty-cooldown` (default `6`) - range `[0, 300]`.
+- `--novelty-spawn-extra` (default `2`) - range `[0, 8]`.
+
+### Band split controls
+
+- `--band-low-hz` (default `220`) - range `[40, 1200]`.
+- `--band-high-hz` (default `2600`) - range `[800, 12000]`, must be `> band-low-hz`.
+- `--band-drift-hz` (default `90`) - range `[0, 2000]`.
+- `--band-pin-families` - pin voice families to fixed band ranges.
+
+## Available Algorithm IDs
+
+- `hilbert_drone` - Hilbert Drone
+- `bit_slicing_arpeggios` - Bit-Slicing Arpeggios
+- `wavefolding_delta_bass` - Wavefolding Delta Bass
+- `wavetable_granular_loop` - Wavetable Granular Loop
+- `low_pass_float_aliasing` - Low-pass Float Aliasing
+- `memory_phase_modulation` - Memory Phase Modulation
+- `percussive_rhythm_triggers` - Percussive Rhythm Triggers
+- `bytebeat_processor` - Byte-beat Processor
+- `pointer_walk_melody` - Pointer Walk Melody
+- `granular_freeze_scrub` - Granular Freeze Scrub
+- `cellular_automata_noise` - Cellular Automata Noise
+- `fractal_byte_terrain` - Fractal Byte Terrain
+- `chaotic_lorenz_fm` - Chaotic Lorenz FM
+- `resonator_bank_entropy` - Resonator Bank Entropy
+- `ring_mod_bitplanes` - Ring Mod Bitplanes
+- `karplus_ram_string` - Karplus RAM String
+- `microtonal_glitch_grid` - Microtonal Glitch Grid
+- `polymeter_euclidean_micro` - Polymeter Euclidean Micro
+- `tritave_odd_meter_chords` - Tritave Odd Meter Chords
+- `ram_wavelet_scanner` - RAM Wavelet Scanner
+- `markov_byte_lattice` - Markov Byte Lattice
+- `fdn_prime_feedback` - FDN Prime Feedback
+- `spectral_freeze_permuter` - Spectral Freeze Permuter
+- `modal_mesh_exciter` - Modal Mesh Exciter
+- `bytebeat_formula_evolver` - Bytebeat Formula Evolver
+- `inharmonic_resonator_swarm` - Inharmonic Resonator Swarm
+- `fdn_topology_chaos` - FDN Topology Chaos
+- `spectral_hole_puncher` - Spectral Hole Puncher
+- `granular_pointer_shredder` - Granular Pointer Shredder
+
+## Notes
+
+- Stream mode writes binary `s16le` mono PCM to `stdout`; logs go to `stderr`.
+- If `--mod-matrix-enable` is set and `--buffer-ms > 200`, buffer size is internally reduced to `120 ms`.
+- WAV output is 16-bit mono PCM.
+
+## License
+
+Released under the MIT License. See `LICENSE`.
