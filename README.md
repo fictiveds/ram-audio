@@ -5,8 +5,9 @@
 RAM Audio is a Linux-native command-line synthesizer that converts live process memory snapshots into procedural audio.
 
 > [!IMPORTANT]
-> - Current support: **Linux only**.
-> - Runtime requires **superuser privileges** (`sudo` or root) because the engine reads `/proc/<pid>/mem` and `/proc/<pid>/maps`.
+> - Runtime support: **Linux (stable)** and **Windows (experimental)**.
+> - Windows build is supported experimentally via WinAPI process-memory backend.
+> - Runtime requires elevated privileges: on Linux use **root** (`sudo`) to read `/proc/<pid>/mem` and `/proc/<pid>/maps`; on Windows run terminal as **Administrator** for best process-memory access.
 > - `--help` and `--list-algorithms` can run without root.
 
 ## Features
@@ -24,6 +25,12 @@ RAM Audio is a Linux-native command-line synthesizer that converts live process 
 - GCC or Clang with C++17 support.
 - Optional tools for stream playback: `ffplay` (FFmpeg) or `aplay` (ALSA).
 
+Windows compatibility build:
+
+- CMake 3.16 or newer.
+- MSVC (Visual Studio 2019+), or another C++17 toolchain.
+- Run terminal as Administrator for better process-memory access.
+
 ## Build From Source
 
 ```bash
@@ -32,6 +39,62 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
+## One-Command Build Scripts
+
+### Linux
+
+```bash
+./scripts/build_linux.sh
+```
+
+Artifacts:
+
+- `dist/linux/ram_audio`
+- `dist/linux/ram_audio_telemetry_test`
+
+Optional environment variables:
+
+- `BUILD_TYPE` (default: `Release`)
+- `BUILD_DIR` (default: `build/linux-<build_type>`)
+- `OUT_DIR` (default: `dist/linux`)
+- `RUN_TESTS` (`1` by default, set `0` to skip)
+- `JOBS` (parallel build jobs)
+
+### Windows
+
+Run from PowerShell:
+
+```powershell
+./scripts/build_windows.ps1
+```
+
+Or from `cmd.exe`:
+
+```bat
+scripts\build_windows.bat
+```
+
+What the script does:
+
+- Downloads and unpacks `llvm-mingw`, `cmake`, and `ninja` into `.tools/windows` (project-local).
+- Builds with CMake + Ninja.
+- Runs tests by default.
+- Copies runtime DLLs next to `ram_audio.exe` in `dist/windows`.
+
+Artifacts:
+
+- `dist/windows/ram_audio.exe`
+- `dist/windows/ram_audio_telemetry_test.exe`
+- required runtime DLLs (`libc++.dll`, `libunwind.dll`, and others detected/needed)
+
+PowerShell parameters:
+
+- `-BuildType Release|Debug|RelWithDebInfo|MinSizeRel`
+- `-BuildDir <path>`
+- `-OutDir <path>`
+- `-ToolsDir <path>`
+- `-SkipTests`
+
 Build outputs:
 
 - `build/ram_audio` - main application.
@@ -39,10 +102,42 @@ Build outputs:
 
 ## Run
 
-Command pattern:
+Linux command pattern:
 
 ```bash
 sudo ./build/ram_audio [options]
+```
+
+Windows command pattern (PowerShell, run as Administrator):
+
+```powershell
+.\dist\windows\ram_audio.exe [options]
+```
+
+### Windows quick examples
+
+Show algorithms:
+
+```powershell
+.\dist\windows\ram_audio.exe --list-algorithms
+```
+
+Short WAV render:
+
+```powershell
+.\dist\windows\ram_audio.exe --mode file --output ram_audio_win.wav --duration 30
+```
+
+Reproducible render with fixed seed:
+
+```powershell
+.\dist\windows\ram_audio.exe --mode file --output ram_audio_seed42_win.wav --duration 60 --seed 42 --algorithms chaotic_lorenz_fm,fractal_byte_terrain,karplus_ram_string
+```
+
+Optional stream preview (requires `ffplay` in PATH):
+
+```powershell
+.\dist\windows\ram_audio.exe --mode stream --duration 20 --sample-rate 44100 | ffplay -f s16le -ar 44100 -ac 1 -
 ```
 
 ### Mode: `file` (WAV export)
