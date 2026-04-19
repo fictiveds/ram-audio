@@ -9,7 +9,9 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#if !defined(_WIN32)
 #include <unistd.h>
+#endif
 #include <vector>
 
 namespace {
@@ -146,14 +148,29 @@ bool parseSize(const std::string& value, std::size_t& out) {
 }
 
 volatile std::sig_atomic_t gStopRequested = 0;
+
+#if defined(_WIN32)
+using SignalHandler = void (*)(int);
+SignalHandler gOldSigintHandler = SIG_DFL;
+#if defined(SIGTERM)
+SignalHandler gOldSigtermHandler = SIG_DFL;
+#endif
+#else
 struct sigaction gOldSigintAction;
 struct sigaction gOldSigtermAction;
+#endif
 
 void onSignal(int /*signum*/) {
     gStopRequested = 1;
 }
 
 void installSignalHandlers() {
+#if defined(_WIN32)
+    gOldSigintHandler = std::signal(SIGINT, onSignal);
+#if defined(SIGTERM)
+    gOldSigtermHandler = std::signal(SIGTERM, onSignal);
+#endif
+#else
     std::memset(&gOldSigintAction, 0, sizeof(gOldSigintAction));
     std::memset(&gOldSigtermAction, 0, sizeof(gOldSigtermAction));
 
@@ -164,11 +181,42 @@ void installSignalHandlers() {
 
     sigaction(SIGINT, &action, &gOldSigintAction);
     sigaction(SIGTERM, &action, &gOldSigtermAction);
+#endif
 }
 
 void restoreSignalHandlers() {
+#if defined(_WIN32)
+    if (gOldSigintHandler != SIG_ERR) {
+        std::signal(SIGINT, gOldSigintHandler);
+    }
+#if defined(SIGTERM)
+    if (gOldSigtermHandler != SIG_ERR) {
+        std::signal(SIGTERM, gOldSigtermHandler);
+    }
+#endif
+#else
     sigaction(SIGINT, &gOldSigintAction, nullptr);
     sigaction(SIGTERM, &gOldSigtermAction, nullptr);
+#endif
+}
+
+bool canReadProcessMemory() {
+#if defined(_WIN32)
+    return true;
+#else
+    return ::geteuid() == 0;
+#endif
+}
+
+void printMemoryReadPermissionError(const char* exeName) {
+#if defined(_WIN32)
+    (void)exeName;
+    std::cerr << "Ошибка: недостаточно прав для чтения памяти процессов\n";
+    std::cerr << "Запустите терминал от имени администратора и повторите запуск\n";
+#else
+    std::cerr << "Ошибка: требуется root для чтения /proc/*/mem\n";
+    std::cerr << "Запуск: sudo " << exeName << " [опции]\n";
+#endif
 }
 
 std::string formatDuration(const CliOptions& options) {
@@ -193,7 +241,13 @@ std::vector<std::string> splitCsv(const std::string& source) {
 void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
     std::cout
         << "Использование:\n"
+#if defined(_WIN32)
+        << "  " << exeName << " [опции]\n\n"
+        << "Примечание Windows:\n"
+        << "  Для доступа к памяти большинства процессов нужен запуск от имени администратора.\n\n"
+#else
         << "  sudo " << exeName << " [опции]\n\n"
+#endif
         << "Режимы:\n"
         << "  --mode file|stream         file: запись WAV, stream: RAW PCM в stdout\n\n"
         << "Основные опции:\n"
@@ -1024,9 +1078,8 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    if (::geteuid() != 0) {
-        std::cerr << "Ошибка: требуется root для чтения /proc/*/mem\n";
-        std::cerr << "Запуск: sudo " << argv[0] << " [опции]\n";
+    if (!canReadProcessMemory()) {
+        printMemoryReadPermissionError(argv[0]);
         return 1;
     }
 

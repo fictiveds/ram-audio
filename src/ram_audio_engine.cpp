@@ -5,9 +5,20 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <tlhelp32.h>
+#else
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#endif
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -17,8 +28,10 @@
 #include <unordered_map>
 #include <sstream>
 #include <string>
+#if !defined(_WIN32)
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 
 namespace {
 
@@ -74,6 +87,26 @@ bool parseAddressRange(const std::string& rangeToken, std::uint64_t& start, std:
 }
 
 std::string readProcessName(int pid) {
+#if defined(_WIN32)
+    const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                                       FALSE,
+                                       static_cast<DWORD>(pid));
+    if (process == nullptr) {
+        return "unknown";
+    }
+
+    std::array<char, MAX_PATH> pathBuffer{};
+    DWORD pathLen = static_cast<DWORD>(pathBuffer.size());
+    std::string name = "unknown";
+    if (QueryFullProcessImageNameA(process, 0, pathBuffer.data(), &pathLen) != 0 && pathLen > 0) {
+        const std::string fullPath(pathBuffer.data(), pathLen);
+        const std::size_t slash = fullPath.find_last_of("\\/");
+        name = (slash == std::string::npos) ? fullPath : fullPath.substr(slash + 1);
+    }
+
+    CloseHandle(process);
+    return name;
+#else
     const std::string commPath = "/proc/" + std::to_string(pid) + "/comm";
     std::ifstream comm(commPath);
     if (!comm) {
@@ -85,6 +118,7 @@ std::string readProcessName(int pid) {
         return "unknown";
     }
     return name;
+#endif
 }
 
 bool isAllZero(const std::uint8_t* data, std::size_t size) {
@@ -1902,7 +1936,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
 MemorySnapshot RamAudioEngine::getRandomProcessMemory(std::string& error) {
     const std::vector<int> pids = getAllPids();
     if (pids.empty()) {
-        error = "В /proc не найдено PID";
+        error = "Не найдено доступных PID";
         return {};
     }
 
@@ -1922,9 +1956,11 @@ MemorySnapshot RamAudioEngine::getRandomProcessMemory(std::string& error) {
 
         if (!localError.empty()) {
             lastError = localError;
+#if !defined(_WIN32)
             if (localError.find("доступ") != std::string::npos) {
                 break;
             }
+#endif
         }
     }
 
@@ -1939,6 +1975,97 @@ MemorySnapshot RamAudioEngine::getRandomProcessMemory(std::string& error) {
 MemorySnapshot RamAudioEngine::getProcessMemory(int pid,
                                                 const std::string& processName,
                                                 std::string& error) {
+#if defined(_WIN32)
+    const HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+                                       FALSE,
+                                       static_cast<DWORD>(pid));
+    if (process == nullptr) {
+        const DWORD lastError = GetLastError();
+        if (lastError == ERROR_ACCESS_DENIED) {
+            error = "Ошибка доступа к памяти процесса (Windows): запустите от имени администратора";
+        } else if (lastError == ERROR_INVALID_PARAMETER) {
+            error = "Процесс недоступен или уже завершился";
+        }
+        return {};
+    }
+
+    MemorySnapshot snapshot;
+    snapshot.pid = pid;
+    snapshot.processName = processName;
+    snapshot.bytes.reserve(std::min<std::size_t>(config_.maxMemoryBytes, 4U * 1024U * 1024U));
+
+    std::vector<std::uint8_t> buffer(kChunkSize);
+
+    auto isReadableProtection = [](DWORD protect) {
+        return (protect & PAGE_READONLY) != 0 ||
+               (protect & PAGE_READWRITE) != 0 ||
+               (protect & PAGE_WRITECOPY) != 0 ||
+               (protect & PAGE_EXECUTE_READ) != 0 ||
+               (protect & PAGE_EXECUTE_READWRITE) != 0 ||
+               (protect & PAGE_EXECUTE_WRITECOPY) != 0;
+    };
+
+    std::uintptr_t currentAddress = 0;
+    MEMORY_BASIC_INFORMATION mbi{};
+    while (VirtualQueryEx(process,
+                          reinterpret_cast<LPCVOID>(currentAddress),
+                          &mbi,
+                          sizeof(mbi)) == sizeof(mbi)) {
+        const std::uintptr_t baseAddress = reinterpret_cast<std::uintptr_t>(mbi.BaseAddress);
+        const std::uint64_t regionSize64 = static_cast<std::uint64_t>(mbi.RegionSize);
+
+        if (mbi.State == MEM_COMMIT &&
+            (mbi.Protect & PAGE_NOACCESS) == 0 &&
+            (mbi.Protect & PAGE_GUARD) == 0 &&
+            isReadableProtection(mbi.Protect) &&
+            regionSize64 >= static_cast<std::uint64_t>(kRegionMinBytes) &&
+            regionSize64 <= static_cast<std::uint64_t>(kRegionMaxBytes)) {
+            for (std::uint64_t offset = 0; offset < regionSize64; offset += kChunkSize) {
+                const std::size_t toRead = static_cast<std::size_t>(
+                    std::min<std::uint64_t>(kChunkSize, regionSize64 - offset));
+
+                SIZE_T bytesRead = 0;
+                const BOOL ok = ReadProcessMemory(
+                    process,
+                    reinterpret_cast<LPCVOID>(baseAddress + static_cast<std::uintptr_t>(offset)),
+                    buffer.data(),
+                    toRead,
+                    &bytesRead);
+
+                if (!ok && bytesRead == 0) {
+                    break;
+                }
+
+                const std::size_t chunkBytes = static_cast<std::size_t>(bytesRead);
+                if (chunkBytes == 0) {
+                    break;
+                }
+
+                if (!isAllZero(buffer.data(), chunkBytes)) {
+                    snapshot.bytes.insert(snapshot.bytes.end(),
+                                          buffer.begin(),
+                                          buffer.begin() + static_cast<std::ptrdiff_t>(chunkBytes));
+                    if (snapshot.bytes.size() > config_.maxMemoryBytes) {
+                        break;
+                    }
+                }
+            }
+
+            if (snapshot.bytes.size() > config_.maxMemoryBytes) {
+                break;
+            }
+        }
+
+        const std::uintptr_t nextAddress = baseAddress + static_cast<std::uintptr_t>(mbi.RegionSize);
+        if (nextAddress <= currentAddress) {
+            break;
+        }
+        currentAddress = nextAddress;
+    }
+
+    CloseHandle(process);
+    return snapshot;
+#else
     const std::string mapsPath = "/proc/" + std::to_string(pid) + "/maps";
     const std::string memPath = "/proc/" + std::to_string(pid) + "/mem";
 
@@ -2011,9 +2138,32 @@ MemorySnapshot RamAudioEngine::getProcessMemory(int pid,
 
     ::close(memFd);
     return snapshot;
+#endif
 }
 
 std::vector<int> RamAudioEngine::getAllPids() const {
+#if defined(_WIN32)
+    std::vector<int> pids;
+
+    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return pids;
+    }
+
+    PROCESSENTRY32 processEntry{};
+    processEntry.dwSize = sizeof(processEntry);
+    if (Process32First(snapshot, &processEntry) != FALSE) {
+        do {
+            const DWORD pid = processEntry.th32ProcessID;
+            if (pid > 0 && pid <= static_cast<DWORD>(std::numeric_limits<int>::max())) {
+                pids.push_back(static_cast<int>(pid));
+            }
+        } while (Process32Next(snapshot, &processEntry) != FALSE);
+    }
+
+    CloseHandle(snapshot);
+    return pids;
+#else
     std::vector<int> pids;
 
     DIR* procDir = opendir("/proc");
@@ -2049,6 +2199,7 @@ std::vector<int> RamAudioEngine::getAllPids() const {
 
     closedir(procDir);
     return pids;
+#endif
 }
 
 std::int16_t RamAudioEngine::clampToInt16(double value) {
