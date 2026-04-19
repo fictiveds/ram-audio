@@ -41,6 +41,10 @@ constexpr std::size_t kMemoryMinBytes = 50U * 1024U;
 constexpr std::size_t kChunkSize = 65536;
 constexpr double kPi = 3.14159265358979323846;
 
+const char* selectText(UiLanguage language, const char* english, const char* russian) {
+    return language == UiLanguage::Russian ? russian : english;
+}
+
 double randomDouble(std::mt19937& rng, double minVal, double maxVal) {
     std::uniform_real_distribution<double> dist(minVal, maxVal);
     return dist(rng);
@@ -1378,26 +1382,26 @@ RamAudioEngine::RamAudioEngine(EngineConfig config, AlgorithmRegistry registry)
 
 bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) {
     if (config_.sampleRate <= 1000) {
-        error = "Частота дискретизации слишком низкая";
+        error = selectText(config_.language, "Sample rate is too low", "Частота дискретизации слишком низкая");
         return false;
     }
     if (!config_.infinite && config_.durationSec <= 0) {
-        error = "Длительность должна быть больше нуля";
+        error = selectText(config_.language, "Duration must be greater than zero", "Длительность должна быть больше нуля");
         return false;
     }
     if (config_.maxMemoryBytes < kMemoryMinBytes) {
-        error = "Лимит памяти слишком мал";
+        error = selectText(config_.language, "Memory limit is too small", "Лимит памяти слишком мал");
         return false;
     }
     if (registry_.entries().empty()) {
-        error = "Реестр алгоритмов пуст";
+        error = selectText(config_.language, "Algorithm registry is empty", "Реестр алгоритмов пуст");
         return false;
     }
 
     MemorySnapshot snapshot = getRandomProcessMemory(error);
     if (snapshot.bytes.empty()) {
         if (error.empty()) {
-            error = "Не удалось получить память процесса";
+            error = selectText(config_.language, "Failed to read process memory", "Не удалось получить память процесса");
         }
         return false;
     }
@@ -1408,8 +1412,10 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
     double memoryEntropy = normalizedShannonEntropy(snapshot.bytes);
 
     if (config_.verbose) {
-        std::cerr << "[+] Подключено к процессу: " << snapshot.processName
-                  << " (PID: " << snapshot.pid << "), считано "
+        std::cerr << selectText(config_.language, "[+] Connected to process: ", "[+] Подключено к процессу: ")
+                  << snapshot.processName
+                  << " (PID: " << snapshot.pid << ")"
+                  << selectText(config_.language, ", read ", ", считано ")
                   << std::fixed << std::setprecision(2)
                   << (static_cast<double>(snapshot.bytes.size()) / 1024.0 / 1024.0)
                   << " MB" << std::endl;
@@ -1591,7 +1597,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
     };
 
     if (!createVoice(true)) {
-        error = "Не удалось создать anchor-голос";
+        error = selectText(config_.language, "Failed to create anchor voice", "Не удалось создать anchor-голос");
         return false;
     }
     createVoice(false);
@@ -1760,7 +1766,9 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                 sceneState.activePid = snapshot.pid;
                 sceneState.activeProcessName = snapshot.processName;
                 if (config_.verbose) {
-                    std::cerr << "\n[+] Смена источника: " << snapshot.processName
+                    std::cerr << "\n"
+                              << selectText(config_.language, "[+] Source switched: ", "[+] Смена источника: ")
+                              << snapshot.processName
                               << " (PID: " << snapshot.pid << "), "
                               << std::fixed << std::setprecision(2)
                               << (static_cast<double>(snapshot.bytes.size()) / 1024.0 / 1024.0)
@@ -1769,7 +1777,11 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
                               << " -> " << memoryEntropy << std::endl;
                 }
             } else if (config_.verbose && !switchCandidateError.empty()) {
-                std::cerr << "\n[!] Смена процесса пропущена: " << switchCandidateError << std::endl;
+                std::cerr << "\n"
+                          << selectText(config_.language,
+                                        "[!] Process switch skipped: ",
+                                        "[!] Смена процесса пропущена: ")
+                          << switchCandidateError << std::endl;
             }
         }
 
@@ -1895,7 +1907,11 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
             }
             silenceSamples = 0;
             if (config_.verbose) {
-                std::cerr << "\n[!] Anti-silence: добавлены голоса для восстановления плотности" << std::endl;
+                std::cerr << "\n"
+                          << selectText(config_.language,
+                                        "[!] Anti-silence: extra voices spawned to recover density",
+                                        "[!] Anti-silence: добавлены голоса для восстановления плотности")
+                          << std::endl;
             }
         }
 
@@ -1905,15 +1921,19 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
             if (config_.stopFlag != nullptr && *config_.stopFlag != 0) {
                 break;
             }
-            error = "Ошибка записи сэмпла в поток вывода";
+            error = selectText(config_.language,
+                               "Failed to write sample to output stream",
+                               "Ошибка записи сэмпла в поток вывода");
             return false;
         }
         ++stats.samplesGenerated;
 
         if (config_.verbose && i > 0 && (i % static_cast<std::uint64_t>(config_.sampleRate) == 0ULL)) {
-            std::cerr << "Синтез... " << (i / static_cast<std::uint64_t>(config_.sampleRate))
+            std::cerr << selectText(config_.language, "Synth... ", "Синтез... ")
+                      << (i / static_cast<std::uint64_t>(config_.sampleRate))
                       << " / " << (config_.infinite ? "∞" : std::to_string(config_.durationSec))
-                      << " сек. [Голосов: " << voices.size() << "]\r";
+                      << selectText(config_.language, " sec. [Voices: ", " сек. [Голосов: ")
+                      << voices.size() << "]\r";
             std::cerr.flush();
         }
     }
@@ -1922,7 +1942,9 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
         if (config_.stopFlag != nullptr && *config_.stopFlag != 0) {
             return true;
         }
-        error = "Ошибка финализации потока вывода";
+        error = selectText(config_.language,
+                           "Failed to finalize output stream",
+                           "Ошибка финализации потока вывода");
         return false;
     }
 
@@ -1936,7 +1958,7 @@ bool RamAudioEngine::run(OutputSink& sink, RunStats& stats, std::string& error) 
 MemorySnapshot RamAudioEngine::getRandomProcessMemory(std::string& error) {
     const std::vector<int> pids = getAllPids();
     if (pids.empty()) {
-        error = "Не найдено доступных PID";
+        error = selectText(config_.language, "No available PIDs found", "Не найдено доступных PID");
         return {};
     }
 
@@ -1957,7 +1979,8 @@ MemorySnapshot RamAudioEngine::getRandomProcessMemory(std::string& error) {
         if (!localError.empty()) {
             lastError = localError;
 #if !defined(_WIN32)
-            if (localError.find("доступ") != std::string::npos) {
+            if (localError.find("доступ") != std::string::npos ||
+                localError.find("Access denied") != std::string::npos) {
                 break;
             }
 #endif
@@ -1967,7 +1990,9 @@ MemorySnapshot RamAudioEngine::getRandomProcessMemory(std::string& error) {
     if (!lastError.empty()) {
         error = lastError;
     } else {
-        error = "Не найден подходящий процесс с доступной памятью";
+        error = selectText(config_.language,
+                           "No suitable process with readable memory was found",
+                           "Не найден подходящий процесс с доступной памятью");
     }
     return {};
 }
@@ -1982,9 +2007,13 @@ MemorySnapshot RamAudioEngine::getProcessMemory(int pid,
     if (process == nullptr) {
         const DWORD lastError = GetLastError();
         if (lastError == ERROR_ACCESS_DENIED) {
-            error = "Ошибка доступа к памяти процесса (Windows): запустите от имени администратора";
+            error = selectText(config_.language,
+                               "Process memory access denied (Windows): run as Administrator",
+                               "Ошибка доступа к памяти процесса (Windows): запустите от имени администратора");
         } else if (lastError == ERROR_INVALID_PARAMETER) {
-            error = "Процесс недоступен или уже завершился";
+            error = selectText(config_.language,
+                               "Process is unavailable or already terminated",
+                               "Процесс недоступен или уже завершился");
         }
         return {};
     }
@@ -2077,7 +2106,9 @@ MemorySnapshot RamAudioEngine::getProcessMemory(int pid,
     const int memFd = ::open(memPath.c_str(), O_RDONLY | O_CLOEXEC);
     if (memFd < 0) {
         if (errno == EACCES || errno == EPERM) {
-            error = "Ошибка доступа к /proc/*/mem, запустите с sudo/root";
+            error = selectText(config_.language,
+                               "Access denied to /proc/*/mem, run with sudo/root",
+                               "Ошибка доступа к /proc/*/mem, запустите с sudo/root");
         }
         return {};
     }

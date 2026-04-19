@@ -16,7 +16,7 @@
 
 class WavFileSink final : public OutputSink {
 public:
-    WavFileSink(const std::string& outputPath, int sampleRate);
+    WavFileSink(const std::string& outputPath, int sampleRate, UiLanguage language = UiLanguage::English);
     ~WavFileSink() override;
 
     bool good() const;
@@ -30,6 +30,7 @@ private:
 
     std::string outputPath_;
     int sampleRate_;
+    UiLanguage language_;
     std::ofstream stream_;
     std::size_t sampleCount_;
     std::string error_;
@@ -43,7 +44,9 @@ public:
 
 class BufferedRawStdoutSink final : public OutputSink {
 public:
-    BufferedRawStdoutSink(std::size_t maxSamples, const volatile std::sig_atomic_t* stopFlag);
+    BufferedRawStdoutSink(std::size_t maxSamples,
+                          const volatile std::sig_atomic_t* stopFlag,
+                          UiLanguage language = UiLanguage::English);
     ~BufferedRawStdoutSink() override;
 
     bool good() const;
@@ -57,6 +60,7 @@ private:
 
     std::size_t maxSamples_;
     const volatile std::sig_atomic_t* stopFlag_;
+    UiLanguage language_;
 
     mutable std::mutex mutex_;
     std::condition_variable canReadCv_;

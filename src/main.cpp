@@ -3,12 +3,32 @@
 #include "ram_audio_engine.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <csignal>
 #include <cstring>
 #include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#if defined(__has_include)
+#if __has_include(<windows.h>)
+#include <windows.h>
+#define RAM_AUDIO_HAS_WINDOWS_H 1
+#else
+#define RAM_AUDIO_HAS_WINDOWS_H 0
+#endif
+#else
+#include <windows.h>
+#define RAM_AUDIO_HAS_WINDOWS_H 1
+#endif
+#endif
 #if !defined(_WIN32)
 #include <unistd.h>
 #endif
@@ -83,9 +103,164 @@ struct CliOptions {
     bool bandPinFamilies = false;
     unsigned int seed = 0;
     bool verbose = true;
+    UiLanguage language = UiLanguage::English;
     bool listAlgorithms = false;
     std::vector<std::string> algorithms;
 };
+
+const char* selectText(UiLanguage language, const char* english, const char* russian) {
+    return language == UiLanguage::Russian ? russian : english;
+}
+
+bool startsWith(const std::string& value, const std::string& prefix) {
+    return value.size() >= prefix.size() &&
+           value.compare(0, prefix.size(), prefix) == 0;
+}
+
+std::string toLowerAscii(std::string value) {
+    for (char& ch : value) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return value;
+}
+
+void replaceAll(std::string& value, const std::string& from, const std::string& to) {
+    if (from.empty()) {
+        return;
+    }
+
+    std::size_t pos = 0;
+    while ((pos = value.find(from, pos)) != std::string::npos) {
+        value.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+}
+
+std::string localizeMessage(UiLanguage language, const std::string& message) {
+    std::string out = message;
+    if (out.empty()) {
+        return out;
+    }
+
+    if (language == UiLanguage::English) {
+        replaceAll(out, "Ошибка: ", "Error: ");
+        replaceAll(out, "Ошибка генерации: ", "Generation error: ");
+        replaceAll(out, "Не указано значение для ", "Missing value for ");
+        replaceAll(out, "Некорректное значение ", "Invalid value for ");
+        replaceAll(out, "Некорректный mode: ", "Invalid mode: ");
+        replaceAll(out, "Некорректный --", "Invalid --");
+        replaceAll(out, "Неизвестный аргумент: ", "Unknown argument: ");
+        replaceAll(out, "Неизвестный алгоритм: ", "Unknown algorithm: ");
+        replaceAll(out, "поддерживается только для", "is supported only for");
+        replaceAll(out, "поддерживается: ", "supported: ");
+        replaceAll(out, "ожидается", "expected");
+        replaceAll(out, " или ", " or ");
+        replaceAll(out, "должен быть больше нуля", "must be greater than zero");
+        replaceAll(out, "должен быть меньше", "must be less than");
+        replaceAll(out, "должен быть в диапазоне", "must be in range");
+        replaceAll(out, "Диапазон голосов должен быть корректным: min <= max и > 0",
+                   "Voice range must be valid: min <= max and > 0");
+        replaceAll(out, "Диапазон смены процесса некорректен", "Process switch range is invalid");
+        replaceAll(out, "Диапазон спавна голосов некорректен", "Voice spawn range is invalid");
+        replaceAll(out, "Диапазон --scene-macro-min/--scene-macro-max некорректен",
+                   "--scene-macro-min/--scene-macro-max range is invalid");
+        replaceAll(out, "Диапазон --scene-micro-min/--scene-micro-max некорректен",
+                   "--scene-micro-min/--scene-micro-max range is invalid");
+        replaceAll(out, "Частота дискретизации слишком низкая", "Sample rate is too low");
+        replaceAll(out, "Длительность должна быть больше нуля", "Duration must be greater than zero");
+        replaceAll(out, "Лимит памяти слишком мал", "Memory limit is too small");
+        replaceAll(out, "Реестр алгоритмов пуст", "Algorithm registry is empty");
+        replaceAll(out, "Не удалось получить память процесса", "Failed to read process memory");
+        replaceAll(out, "Не удалось создать anchor-голос", "Failed to create anchor voice");
+        replaceAll(out, "Ошибка записи сэмпла в поток вывода", "Failed to write sample to output stream");
+        replaceAll(out, "Ошибка финализации потока вывода", "Failed to finalize output stream");
+        replaceAll(out, "Не найдено доступных PID", "No available PIDs found");
+        replaceAll(out, "Не найден подходящий процесс с доступной памятью",
+                   "No suitable process with readable memory was found");
+        replaceAll(out, "Ошибка доступа к памяти процесса (Windows): запустите от имени администратора",
+                   "Process memory access denied (Windows): run as Administrator");
+        replaceAll(out, "Процесс недоступен или уже завершился",
+                   "Process is unavailable or already terminated");
+        replaceAll(out, "Ошибка доступа к /proc/*/mem, запустите с sudo/root",
+                   "Access denied to /proc/*/mem, run with sudo/root");
+        replaceAll(out, "Не удалось открыть WAV файл для записи", "Failed to open WAV file for writing");
+        replaceAll(out, "Не удалось записать WAV заголовок", "Failed to write WAV header");
+        replaceAll(out, "Ошибка записи WAV данных", "Failed to write WAV data");
+        replaceAll(out, "WAV файл превышает лимит 4 GB", "WAV file exceeds 4 GB limit");
+        replaceAll(out, "Не удалось обновить WAV заголовок", "Failed to update WAV header");
+        replaceAll(out, "Поток WAV недоступен", "WAV stream is unavailable");
+        replaceAll(out, "Ошибка записи WAV заголовка", "Failed to write WAV header");
+        replaceAll(out, "Ошибка записи в stdout", "Failed to write to stdout");
+        replaceAll(out, "Ошибка flush stdout", "Failed to flush stdout");
+    }
+
+    return out;
+}
+
+std::string maybeLocalizeForCurrentLanguage(UiLanguage language, const std::string& message) {
+    if (language == UiLanguage::English) {
+        return localizeMessage(language, message);
+    }
+    return message;
+}
+
+bool parseLanguageValue(const std::string& value, UiLanguage& out) {
+    const std::string normalized = toLowerAscii(value);
+    if (normalized == "en" || normalized == "eng" || normalized == "english") {
+        out = UiLanguage::English;
+        return true;
+    }
+    if (normalized == "ru" || normalized == "rus" || normalized == "russian") {
+        out = UiLanguage::Russian;
+        return true;
+    }
+    return false;
+}
+
+UiLanguage detectPreferredLanguageFromArgs(int argc, char** argv) {
+    UiLanguage language = UiLanguage::English;
+
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (startsWith(arg, "--lang=")) {
+            UiLanguage parsed = UiLanguage::English;
+            if (parseLanguageValue(arg.substr(7), parsed)) {
+                language = parsed;
+            }
+            continue;
+        }
+        if (startsWith(arg, "--language=")) {
+            UiLanguage parsed = UiLanguage::English;
+            if (parseLanguageValue(arg.substr(11), parsed)) {
+                language = parsed;
+            }
+            continue;
+        }
+
+        if (arg == "--lang" || arg == "--language") {
+            if (i + 1 < argc) {
+                UiLanguage parsed = UiLanguage::English;
+                if (parseLanguageValue(argv[i + 1], parsed)) {
+                    language = parsed;
+                }
+                ++i;
+            }
+        }
+    }
+
+    return language;
+}
+
+void configureConsoleEncoding(UiLanguage language) {
+#if defined(_WIN32) && RAM_AUDIO_HAS_WINDOWS_H
+    if (language == UiLanguage::Russian) {
+        SetConsoleOutputCP(CP_UTF8);
+        SetConsoleCP(CP_UTF8);
+    }
+#else
+    (void)language;
+#endif
+}
 
 bool isFlag(const std::string& arg, const std::string& longName, const std::string& shortName = "") {
     return arg == longName || (!shortName.empty() && arg == shortName);
@@ -208,22 +383,31 @@ bool canReadProcessMemory() {
 #endif
 }
 
-void printMemoryReadPermissionError(const char* exeName) {
+void printMemoryReadPermissionError(const char* exeName, UiLanguage language) {
 #if defined(_WIN32)
     (void)exeName;
-    std::cerr << "Ошибка: недостаточно прав для чтения памяти процессов\n";
-    std::cerr << "Запустите терминал от имени администратора и повторите запуск\n";
+    std::cerr << selectText(language,
+                            "Error: insufficient privileges to read process memory\n",
+                            "Ошибка: недостаточно прав для чтения памяти процессов\n");
+    std::cerr << selectText(language,
+                            "Run terminal as Administrator and try again\n",
+                            "Запустите терминал от имени администратора и повторите запуск\n");
 #else
-    std::cerr << "Ошибка: требуется root для чтения /proc/*/mem\n";
-    std::cerr << "Запуск: sudo " << exeName << " [опции]\n";
+    std::cerr << selectText(language,
+                            "Error: root is required to read /proc/*/mem\n",
+                            "Ошибка: требуется root для чтения /proc/*/mem\n");
+    std::cerr << selectText(language, "Run: sudo ", "Запуск: sudo ")
+              << exeName
+              << selectText(language, " [options]\n", " [опции]\n");
 #endif
 }
 
 std::string formatDuration(const CliOptions& options) {
     if (options.infinite) {
-        return "бесконечно";
+        return selectText(options.language, "infinite", "бесконечно");
     }
-    return std::to_string(options.durationSec) + " сек";
+    return std::to_string(options.durationSec) +
+           selectText(options.language, " sec", " сек");
 }
 
 std::vector<std::string> splitCsv(const std::string& source) {
@@ -238,89 +422,176 @@ std::vector<std::string> splitCsv(const std::string& source) {
     return out;
 }
 
-void printUsage(const std::string& exeName, const AlgorithmRegistry& registry) {
-    std::cout
-        << "Использование:\n"
+void printUsage(const std::string& exeName, const AlgorithmRegistry& registry, UiLanguage language) {
+    if (language == UiLanguage::Russian) {
+        std::cout
+            << "Использование:\n"
 #if defined(_WIN32)
-        << "  " << exeName << " [опции]\n\n"
-        << "Примечание Windows:\n"
-        << "  Для доступа к памяти большинства процессов нужен запуск от имени администратора.\n\n"
+            << "  " << exeName << " [опции]\n\n"
+            << "Примечание Windows:\n"
+            << "  Для доступа к памяти большинства процессов нужен запуск от имени администратора.\n\n"
 #else
-        << "  sudo " << exeName << " [опции]\n\n"
+            << "  sudo " << exeName << " [опции]\n\n"
 #endif
-        << "Режимы:\n"
-        << "  --mode file|stream         file: запись WAV, stream: RAW PCM в stdout\n\n"
-        << "Основные опции:\n"
-        << "  --output <path>            путь WAV-файла (только mode=file)\n"
-        << "  --duration <sec>           длительность генерации, сек (по умолчанию 180)\n"
-        << "  --infinite                 бесконечная генерация до Ctrl+C\n"
-        << "  --sample-rate <hz>         частота дискретизации (по умолчанию 44100)\n"
-        << "  --buffer-ms <ms>           буфер вывода для stream, 0=без буфера (по умолчанию 500)\n"
-        << "  --max-memory-mb <mb>       лимит считанной памяти процесса (по умолчанию 60)\n"
-        << "  --algorithms <a,b,c>       список ID алгоритмов для выбора\n"
-        << "  --timing-mode <m>          режим таймингов (uniform|lognormal|powerlaw|auto)\n"
-        << "  --timing-log-sigma <v>     sigma для lognormal-таймингов (по умолчанию 0.60)\n"
-        << "  --timing-power-alpha <v>   alpha для power-law таймингов (по умолчанию 1.80)\n"
-        << "  --timing-auto-chaos <v>    степень хаоса режима auto [0..1] (по умолчанию 0.55)\n"
-        << "  --genetic-mutation-rate <v> вероятность мутации при genetic spawn [0..1]\n"
-        << "  --genetic-mutation-depth <v> глубина мутации параметров [0..1]\n"
-        << "  --genetic-algo-mutation <v> вероятность смены алгоритма при genetic spawn [0..1]\n"
-        << "  --mod-matrix-enable        включить modulation matrix\n"
-        << "  --mod-matrix-depth <v>     глубина modulation matrix [0..1]\n"
-        << "  --mod-feedback-limit <v>   ограничение feedback в modulation matrix [0..0.95]\n"
-        << "  --mod-wavefold <v>         глубина wavefold в modulation matrix [0..1]\n"
-        << "  --ghost-depth <v>          глубина ghost-buffer blend [0..1]\n"
-        << "  --ghost-decay <v>          decay ghost-buffer blend [0.90..0.9999]\n"
-        << "  --ghost-grain-ms <n>       размер grain ghost-buffer, мс\n"
-        << "  --transient-threshold <v>  порог transient detector\n"
-        << "  --transient-hysteresis <v> hysteresis transient detector\n"
-        << "  --transient-attack-ms <n>  атака transient детектора, мс\n"
-        << "  --transient-release-ms <n> release transient детектора, мс\n"
-        << "  --transient-gain <v>       gain transient шины\n"
-        << "  --sustain-gain <v>         gain sustain шины\n"
-        << "  --transient-shape <v>      shape transient шины [0..1]\n"
-        << "  --sustain-shape <v>        shape sustain шины [0..1]\n"
-        << "  --switch-mode <mode>       режим переключения сцен (timer|entropy-triggered)\n"
-        << "  --mix-mode <mode>          режим микширования (smoothed)\n"
-        << "  --entropy-delta-up <v>     порог роста энтропии RAM для switch (по умолчанию 0.015)\n"
-        << "  --entropy-delta-down <v>   порог падения энтропии RAM для switch (по умолчанию 0.015)\n"
-        << "  --entropy-hysteresis <v>   hysteresis для entropy-switch (по умолчанию 0.004)\n"
-        << "  --switch-cooldown <sec>    cooldown между switch-событиями (по умолчанию 2)\n"
-        << "  --scene-macro-min <sec>    min длительность macro-сцены (по умолчанию 30)\n"
-        << "  --scene-macro-max <sec>    max длительность macro-сцены (по умолчанию 180)\n"
-        << "  --scene-micro-min <ms>     min длительность micro-фазы (по умолчанию 300)\n"
-        << "  --scene-micro-max <ms>     max длительность micro-фазы (по умолчанию 4000)\n"
-        << "  --target-rms <v>           целевой RMS мастера (по умолчанию 9000)\n"
-        << "  --limiter-ceiling <v>      ceiling мягкого лимитера (по умолчанию 28000)\n"
-        << "  --limiter-max-gain <v>     максимум makeup gain лимитера (по умолчанию 1.8)\n"
-        << "  --min-scene-time <sec>     минимальная длительность сцены (по умолчанию 8)\n"
-        << "  --crossfade-ms <ms>        длительность crossfade (по умолчанию 140)\n"
-        << "  --switch-prob-base <v>     базовая вероятность switch [0..1] (по умолчанию 0.22)\n"
-        << "  --switch-prob-energy <v>   вес energy в switch-prob [0..1] (по умолчанию 0.28)\n"
-        << "  --switch-prob-novelty <v>  вес novelty в switch-prob [0..1] (по умолчанию 0.36)\n"
-        << "  --switch-prob-hyst <v>     hysteresis для switch-prob [0..1] (по умолчанию 0.08)\n"
-        << "  --hmm-tabu-window <n>      tabu-окно для повторов алгоритмов (по умолчанию 3)\n"
-        << "  --hmm-novelty-bias <v>     bias к редким алгоритмам [0..1] (по умолчанию 0.22)\n"
-        << "  --novelty-threshold <v>    threshold similarity для novelty-guard [0..1]\n"
-        << "  --novelty-history <n>      размер окна fingerprint history\n"
-        << "  --novelty-cooldown <sec>   cooldown recovery novelty-guard\n"
-        << "  --novelty-spawn-extra <n>  доп. голоса при срабатывании novelty-guard\n"
-        << "  --band-low-hz <v>          нижняя частота раздела band-split (по умолчанию 220)\n"
-        << "  --band-high-hz <v>         верхняя частота раздела band-split (по умолчанию 2600)\n"
-        << "  --band-drift-hz <v>        амплитуда дрейфа частот раздела (по умолчанию 90)\n"
-        << "  --band-pin-families        закреплять семейства голосов за полосами\n"
-        << "  --list-algorithms          показать доступные алгоритмы\n"
-        << "  --seed <num>               фиксировать seed (0 = случайный)\n"
-        << "  --quiet                    отключить лог прогресса\n"
-        << "  --help                     показать эту справку\n\n"
-        << "Полифония и тайминги:\n"
-        << "  --min-voices <n>           минимум голосов\n"
-        << "  --max-voices <n>           максимум голосов\n"
-        << "  --memory-switch-min <sec>  минимум между сменами процесса\n"
-        << "  --memory-switch-max <sec>  максимум между сменами процесса\n"
-        << "  --voice-spawn-min <sec>    минимум между появлением голосов\n"
-        << "  --voice-spawn-max <sec>    максимум между появлением голосов\n\n"
-        << "Доступные алгоритмы:\n";
+            << "Режимы:\n"
+            << "  --mode file|stream         file: запись WAV, stream: RAW PCM в stdout\n\n"
+            << "Основные опции:\n"
+            << "  --lang <en|ru>             язык интерфейса (по умолчанию en)\n"
+            << "  --output <path>            путь WAV-файла (только mode=file)\n"
+            << "  --duration <sec>           длительность генерации, сек (по умолчанию 180)\n"
+            << "  --infinite                 бесконечная генерация до Ctrl+C\n"
+            << "  --sample-rate <hz>         частота дискретизации (по умолчанию 44100)\n"
+            << "  --buffer-ms <ms>           буфер вывода для stream, 0=без буфера (по умолчанию 500)\n"
+            << "  --max-memory-mb <mb>       лимит считанной памяти процесса (по умолчанию 60)\n"
+            << "  --algorithms <a,b,c>       список ID алгоритмов для выбора\n"
+            << "  --timing-mode <m>          режим таймингов (uniform|lognormal|powerlaw|auto)\n"
+            << "  --timing-log-sigma <v>     sigma для lognormal-таймингов (по умолчанию 0.60)\n"
+            << "  --timing-power-alpha <v>   alpha для power-law таймингов (по умолчанию 1.80)\n"
+            << "  --timing-auto-chaos <v>    степень хаоса режима auto [0..1] (по умолчанию 0.55)\n"
+            << "  --genetic-mutation-rate <v> вероятность мутации при genetic spawn [0..1]\n"
+            << "  --genetic-mutation-depth <v> глубина мутации параметров [0..1]\n"
+            << "  --genetic-algo-mutation <v> вероятность смены алгоритма при genetic spawn [0..1]\n"
+            << "  --mod-matrix-enable        включить modulation matrix\n"
+            << "  --mod-matrix-depth <v>     глубина modulation matrix [0..1]\n"
+            << "  --mod-feedback-limit <v>   ограничение feedback в modulation matrix [0..0.95]\n"
+            << "  --mod-wavefold <v>         глубина wavefold в modulation matrix [0..1]\n"
+            << "  --ghost-depth <v>          глубина ghost-buffer blend [0..1]\n"
+            << "  --ghost-decay <v>          decay ghost-buffer blend [0.90..0.9999]\n"
+            << "  --ghost-grain-ms <n>       размер grain ghost-buffer, мс\n"
+            << "  --transient-threshold <v>  порог transient detector\n"
+            << "  --transient-hysteresis <v> hysteresis transient detector\n"
+            << "  --transient-attack-ms <n>  атака transient детектора, мс\n"
+            << "  --transient-release-ms <n> release transient детектора, мс\n"
+            << "  --transient-gain <v>       gain transient шины\n"
+            << "  --sustain-gain <v>         gain sustain шины\n"
+            << "  --transient-shape <v>      shape transient шины [0..1]\n"
+            << "  --sustain-shape <v>        shape sustain шины [0..1]\n"
+            << "  --switch-mode <mode>       режим переключения сцен (timer|entropy-triggered)\n"
+            << "  --mix-mode <mode>          режим микширования (smoothed)\n"
+            << "  --entropy-delta-up <v>     порог роста энтропии RAM для switch (по умолчанию 0.015)\n"
+            << "  --entropy-delta-down <v>   порог падения энтропии RAM для switch (по умолчанию 0.015)\n"
+            << "  --entropy-hysteresis <v>   hysteresis для entropy-switch (по умолчанию 0.004)\n"
+            << "  --switch-cooldown <sec>    cooldown между switch-событиями (по умолчанию 2)\n"
+            << "  --scene-macro-min <sec>    min длительность macro-сцены (по умолчанию 30)\n"
+            << "  --scene-macro-max <sec>    max длительность macro-сцены (по умолчанию 180)\n"
+            << "  --scene-micro-min <ms>     min длительность micro-фазы (по умолчанию 300)\n"
+            << "  --scene-micro-max <ms>     max длительность micro-фазы (по умолчанию 4000)\n"
+            << "  --target-rms <v>           целевой RMS мастера (по умолчанию 9000)\n"
+            << "  --limiter-ceiling <v>      ceiling мягкого лимитера (по умолчанию 28000)\n"
+            << "  --limiter-max-gain <v>     максимум makeup gain лимитера (по умолчанию 1.8)\n"
+            << "  --min-scene-time <sec>     минимальная длительность сцены (по умолчанию 8)\n"
+            << "  --crossfade-ms <ms>        длительность crossfade (по умолчанию 140)\n"
+            << "  --switch-prob-base <v>     базовая вероятность switch [0..1] (по умолчанию 0.22)\n"
+            << "  --switch-prob-energy <v>   вес energy в switch-prob [0..1] (по умолчанию 0.28)\n"
+            << "  --switch-prob-novelty <v>  вес novelty в switch-prob [0..1] (по умолчанию 0.36)\n"
+            << "  --switch-prob-hyst <v>     hysteresis для switch-prob [0..1] (по умолчанию 0.08)\n"
+            << "  --hmm-tabu-window <n>      tabu-окно для повторов алгоритмов (по умолчанию 3)\n"
+            << "  --hmm-novelty-bias <v>     bias к редким алгоритмам [0..1] (по умолчанию 0.22)\n"
+            << "  --novelty-threshold <v>    threshold similarity для novelty-guard [0..1]\n"
+            << "  --novelty-history <n>      размер окна fingerprint history\n"
+            << "  --novelty-cooldown <sec>   cooldown recovery novelty-guard\n"
+            << "  --novelty-spawn-extra <n>  доп. голоса при срабатывании novelty-guard\n"
+            << "  --band-low-hz <v>          нижняя частота раздела band-split (по умолчанию 220)\n"
+            << "  --band-high-hz <v>         верхняя частота раздела band-split (по умолчанию 2600)\n"
+            << "  --band-drift-hz <v>        амплитуда дрейфа частот раздела (по умолчанию 90)\n"
+            << "  --band-pin-families        закреплять семейства голосов за полосами\n"
+            << "  --list-algorithms          показать доступные алгоритмы\n"
+            << "  --seed <num>               фиксировать seed (0 = случайный)\n"
+            << "  --quiet                    отключить лог прогресса\n"
+            << "  --help                     показать эту справку\n\n"
+            << "Полифония и тайминги:\n"
+            << "  --min-voices <n>           минимум голосов\n"
+            << "  --max-voices <n>           максимум голосов\n"
+            << "  --memory-switch-min <sec>  минимум между сменами процесса\n"
+            << "  --memory-switch-max <sec>  максимум между сменами процесса\n"
+            << "  --voice-spawn-min <sec>    минимум между появлением голосов\n"
+            << "  --voice-spawn-max <sec>    максимум между появлением голосов\n\n"
+            << "Доступные алгоритмы:\n";
+    } else {
+        std::cout
+            << "Usage:\n"
+#if defined(_WIN32)
+            << "  " << exeName << " [options]\n\n"
+            << "Windows note:\n"
+            << "  Run as Administrator to access memory of most processes.\n\n"
+#else
+            << "  sudo " << exeName << " [options]\n\n"
+#endif
+            << "Modes:\n"
+            << "  --mode file|stream         file: write WAV, stream: raw PCM to stdout\n\n"
+            << "Main options:\n"
+            << "  --lang <en|ru>             interface language (default: en)\n"
+            << "  --output <path>            output WAV path (mode=file only)\n"
+            << "  --duration <sec>           generation duration in seconds (default 180)\n"
+            << "  --infinite                 run until Ctrl+C\n"
+            << "  --sample-rate <hz>         sample rate (default 44100)\n"
+            << "  --buffer-ms <ms>           stream buffer, 0=disabled (default 500)\n"
+            << "  --max-memory-mb <mb>       max per-process memory snapshot (default 60)\n"
+            << "  --algorithms <a,b,c>       comma-separated algorithm IDs\n"
+            << "  --timing-mode <m>          timing mode (uniform|lognormal|powerlaw|auto)\n"
+            << "  --timing-log-sigma <v>     sigma for lognormal timing (default 0.60)\n"
+            << "  --timing-power-alpha <v>   alpha for power-law timing (default 1.80)\n"
+            << "  --timing-auto-chaos <v>    chaos amount for auto mode [0..1] (default 0.55)\n"
+            << "  --genetic-mutation-rate <v> mutation probability in genetic spawn [0..1]\n"
+            << "  --genetic-mutation-depth <v> parameter mutation depth [0..1]\n"
+            << "  --genetic-algo-mutation <v> algorithm mutation probability [0..1]\n"
+            << "  --mod-matrix-enable        enable modulation matrix\n"
+            << "  --mod-matrix-depth <v>     modulation matrix depth [0..1]\n"
+            << "  --mod-feedback-limit <v>   modulation matrix feedback limit [0..0.95]\n"
+            << "  --mod-wavefold <v>         modulation matrix wavefold depth [0..1]\n"
+            << "  --ghost-depth <v>          ghost-buffer blend depth [0..1]\n"
+            << "  --ghost-decay <v>          ghost-buffer blend decay [0.90..0.9999]\n"
+            << "  --ghost-grain-ms <n>       ghost-buffer grain size, ms\n"
+            << "  --transient-threshold <v>  transient detector threshold\n"
+            << "  --transient-hysteresis <v> transient detector hysteresis\n"
+            << "  --transient-attack-ms <n>  transient detector attack, ms\n"
+            << "  --transient-release-ms <n> transient detector release, ms\n"
+            << "  --transient-gain <v>       transient bus gain\n"
+            << "  --sustain-gain <v>         sustain bus gain\n"
+            << "  --transient-shape <v>      transient bus shape [0..1]\n"
+            << "  --sustain-shape <v>        sustain bus shape [0..1]\n"
+            << "  --switch-mode <mode>       scene switch mode (timer|entropy-triggered)\n"
+            << "  --mix-mode <mode>          mix mode (smoothed)\n"
+            << "  --entropy-delta-up <v>     RAM entropy rise threshold for switch (default 0.015)\n"
+            << "  --entropy-delta-down <v>   RAM entropy fall threshold for switch (default 0.015)\n"
+            << "  --entropy-hysteresis <v>   hysteresis for entropy switch (default 0.004)\n"
+            << "  --switch-cooldown <sec>    cooldown between switch events (default 2)\n"
+            << "  --scene-macro-min <sec>    min macro-scene duration (default 30)\n"
+            << "  --scene-macro-max <sec>    max macro-scene duration (default 180)\n"
+            << "  --scene-micro-min <ms>     min micro-phase duration (default 300)\n"
+            << "  --scene-micro-max <ms>     max micro-phase duration (default 4000)\n"
+            << "  --target-rms <v>           target master RMS (default 9000)\n"
+            << "  --limiter-ceiling <v>      soft limiter ceiling (default 28000)\n"
+            << "  --limiter-max-gain <v>     max limiter makeup gain (default 1.8)\n"
+            << "  --min-scene-time <sec>     minimum scene duration (default 8)\n"
+            << "  --crossfade-ms <ms>        crossfade duration (default 140)\n"
+            << "  --switch-prob-base <v>     base switch probability [0..1] (default 0.22)\n"
+            << "  --switch-prob-energy <v>   energy weight in switch probability [0..1] (default 0.28)\n"
+            << "  --switch-prob-novelty <v>  novelty weight in switch probability [0..1] (default 0.36)\n"
+            << "  --switch-prob-hyst <v>     hysteresis for switch probability [0..1] (default 0.08)\n"
+            << "  --hmm-tabu-window <n>      tabu window for algorithm repetition (default 3)\n"
+            << "  --hmm-novelty-bias <v>     bias toward rare algorithms [0..1] (default 0.22)\n"
+            << "  --novelty-threshold <v>    similarity threshold for novelty guard [0..1]\n"
+            << "  --novelty-history <n>      novelty fingerprint history window size\n"
+            << "  --novelty-cooldown <sec>   novelty-guard recovery cooldown\n"
+            << "  --novelty-spawn-extra <n>  extra voices when novelty guard triggers\n"
+            << "  --band-low-hz <v>          low split frequency for band split (default 220)\n"
+            << "  --band-high-hz <v>         high split frequency for band split (default 2600)\n"
+            << "  --band-drift-hz <v>        split-frequency drift amount (default 90)\n"
+            << "  --band-pin-families        pin voice families to fixed bands\n"
+            << "  --list-algorithms          show available algorithms\n"
+            << "  --seed <num>               set fixed seed (0 = random)\n"
+            << "  --quiet                    disable progress logs\n"
+            << "  --help                     show this help\n\n"
+            << "Polyphony and scheduler:\n"
+            << "  --min-voices <n>           minimum active voices\n"
+            << "  --max-voices <n>           maximum active voices\n"
+            << "  --memory-switch-min <sec>  minimum seconds between process switches\n"
+            << "  --memory-switch-max <sec>  maximum seconds between process switches\n"
+            << "  --voice-spawn-min <sec>    minimum seconds between voice spawns\n"
+            << "  --voice-spawn-max <sec>    maximum seconds between voice spawns\n\n"
+            << "Available algorithms:\n";
+    }
 
     for (const auto& entry : registry.entries()) {
         std::cout << "  - " << entry.id << " : " << entry.description << "\n";
@@ -352,6 +623,30 @@ bool parseCli(int argc,
         if (isFlag(arg, "--help", "-h")) {
             showHelp = true;
             return true;
+        } else if (startsWith(arg, "--lang=")) {
+            UiLanguage parsed = UiLanguage::English;
+            if (!parseLanguageValue(arg.substr(7), parsed)) {
+                error = "Некорректное значение --lang (ожидается en или ru)";
+                return false;
+            }
+            options.language = parsed;
+        } else if (startsWith(arg, "--language=")) {
+            UiLanguage parsed = UiLanguage::English;
+            if (!parseLanguageValue(arg.substr(11), parsed)) {
+                error = "Некорректное значение --language (ожидается en или ru)";
+                return false;
+            }
+            options.language = parsed;
+        } else if (isFlag(arg, "--lang") || isFlag(arg, "--language")) {
+            if (!requireValue(arg, value)) {
+                return false;
+            }
+            UiLanguage parsed = UiLanguage::English;
+            if (!parseLanguageValue(value, parsed)) {
+                error = "Некорректное значение " + arg + " (ожидается en или ru)";
+                return false;
+            }
+            options.language = parsed;
         } else if (isFlag(arg, "--list-algorithms")) {
             options.listAlgorithms = true;
         } else if (isFlag(arg, "--quiet", "-q")) {
@@ -1046,6 +1341,7 @@ EngineConfig toEngineConfig(const CliOptions& options) {
     config.bandPinFamilies = options.bandPinFamilies;
     config.seed = options.seed;
     config.verbose = options.verbose;
+    config.language = options.language;
     config.stopFlag = &gStopRequested;
     config.allowedAlgorithmIds = options.algorithms;
     return config;
@@ -1056,22 +1352,27 @@ int main(int argc, char** argv) {
     AlgorithmRegistry registry = createDefaultAlgorithmRegistry();
 
     CliOptions options;
+    options.language = detectPreferredLanguageFromArgs(argc, argv);
+    configureConsoleEncoding(options.language);
     std::string cliError;
     bool showHelp = false;
 
     if (!parseCli(argc, argv, registry, options, cliError, showHelp)) {
-        std::cerr << "Ошибка: " << cliError << "\n\n";
-        printUsage(argv[0], registry);
+        std::cerr << selectText(options.language, "Error: ", "Ошибка: ")
+                  << maybeLocalizeForCurrentLanguage(options.language, cliError) << "\n\n";
+        printUsage(argv[0], registry, options.language);
         return 1;
     }
 
+    configureConsoleEncoding(options.language);
+
     if (showHelp) {
-        printUsage(argv[0], registry);
+        printUsage(argv[0], registry, options.language);
         return 0;
     }
 
     if (options.listAlgorithms) {
-        std::cout << "Алгоритмы:\n";
+        std::cout << selectText(options.language, "Algorithms:\n", "Алгоритмы:\n");
         for (const auto& entry : registry.entries()) {
             std::cout << "- " << entry.id << " : " << entry.description << "\n";
         }
@@ -1079,7 +1380,7 @@ int main(int argc, char** argv) {
     }
 
     if (!canReadProcessMemory()) {
-        printMemoryReadPermissionError(argv[0]);
+        printMemoryReadPermissionError(argv[0], options.language);
         return 1;
     }
 
@@ -1097,9 +1398,12 @@ int main(int argc, char** argv) {
     OutputSink* sink = nullptr;
 
     if (options.mode == OutputMode::File) {
-        wavHolder = std::make_unique<WavFileSink>(options.outputPath, options.sampleRate);
+        wavHolder = std::make_unique<WavFileSink>(options.outputPath,
+                                                  options.sampleRate,
+                                                  options.language);
         if (!wavHolder->good()) {
-            std::cerr << "Ошибка: " << wavHolder->error() << "\n";
+            std::cerr << selectText(options.language, "Error: ", "Ошибка: ")
+                      << maybeLocalizeForCurrentLanguage(options.language, wavHolder->error()) << "\n";
             return 1;
         }
         sink = wavHolder.get();
@@ -1112,9 +1416,14 @@ int main(int argc, char** argv) {
             const std::size_t bufferedSamples = std::max<std::size_t>(
                 1,
                 (sampleRate * options.bufferMs + 999U) / 1000U);
-            bufferedStreamHolder = std::make_unique<BufferedRawStdoutSink>(bufferedSamples, &gStopRequested);
+            bufferedStreamHolder = std::make_unique<BufferedRawStdoutSink>(
+                bufferedSamples,
+                &gStopRequested,
+                options.language);
             if (!bufferedStreamHolder->good()) {
-                std::cerr << "Ошибка: " << bufferedStreamHolder->error() << "\n";
+                std::cerr << selectText(options.language, "Error: ", "Ошибка: ")
+                          << maybeLocalizeForCurrentLanguage(options.language, bufferedStreamHolder->error())
+                          << "\n";
                 restoreSignalHandlers();
                 return 1;
             }
@@ -1123,16 +1432,25 @@ int main(int argc, char** argv) {
     }
 
     if (options.verbose) {
-        std::cerr << "Генерация RAM-аудио: " << formatDuration(options) << ", "
-                  << config.sampleRate << " Hz, режим="
+        std::cerr << selectText(options.language, "Generating RAM audio: ", "Генерация RAM-аудио: ")
+                  << formatDuration(options) << ", "
+                  << config.sampleRate << " Hz, "
+                  << selectText(options.language, "mode=", "режим=")
                   << (options.mode == OutputMode::File ? "file" : "stream") << std::endl;
         if (options.mode == OutputMode::Stream) {
-            std::cerr << "Буфер stream: " << options.bufferMs << " ms"
-                      << (options.bufferMs == 0 ? " (выключен)" : "") << std::endl;
+            std::cerr << selectText(options.language, "Stream buffer: ", "Буфер stream: ")
+                      << options.bufferMs << " ms"
+                      << (options.bufferMs == 0 ? selectText(options.language, " (disabled)", " (выключен)")
+                                                : "")
+                      << std::endl;
         }
-        std::cerr << "Switch mode: " << options.switchMode
-                  << ", Mix mode: " << options.mixMode << std::endl;
-        std::cerr << "Mod matrix: " << (options.modulationMatrixEnable ? "on" : "off")
+        std::cerr << selectText(options.language, "Switch mode: ", "Режим переключения: ") << options.switchMode
+                  << selectText(options.language, ", Mix mode: ", ", Режим микса: ")
+                  << options.mixMode << std::endl;
+        std::cerr << selectText(options.language, "Mod matrix: ", "Mod matrix: ")
+                  << (options.modulationMatrixEnable
+                          ? selectText(options.language, "on", "on")
+                          : selectText(options.language, "off", "off"))
                   << " depth=" << options.modulationMatrixDepth
                   << " feedback=" << options.modulationFeedbackLimit
                   << " wavefold=" << options.modulationWavefoldDepth << std::endl;
@@ -1143,7 +1461,7 @@ int main(int argc, char** argv) {
                       << ", cooldown=" << options.switchCooldownSec << "s" << std::endl;
         }
         if (options.infinite) {
-            std::cerr << "Остановка: Ctrl+C" << std::endl;
+            std::cerr << selectText(options.language, "Stop: Ctrl+C", "Остановка: Ctrl+C") << std::endl;
         }
     }
 
@@ -1152,14 +1470,19 @@ int main(int argc, char** argv) {
     restoreSignalHandlers();
 
     if (!ok) {
-        std::cerr << "Ошибка генерации: " << runError << "\n";
+        std::cerr << selectText(options.language, "Generation error: ", "Ошибка генерации: ")
+                  << maybeLocalizeForCurrentLanguage(options.language, runError) << "\n";
         return 1;
     }
 
     if (options.mode == OutputMode::File && options.verbose) {
-        std::cerr << "Готово: " << options.outputPath << std::endl;
+        std::cerr << selectText(options.language, "Done: ", "Готово: ")
+                  << options.outputPath << std::endl;
     } else if (options.mode == OutputMode::Stream && options.infinite && options.verbose) {
-        std::cerr << "Стрим остановлен пользователем" << std::endl;
+        std::cerr << selectText(options.language,
+                                "Stream stopped by user",
+                                "Стрим остановлен пользователем")
+                  << std::endl;
     }
 
     return 0;

@@ -17,6 +17,11 @@ enum class OutputMode {
     Stream
 };
 
+enum class UiLanguage {
+    English,
+    Russian
+};
+
 struct VoiceDescriptor {
     std::string algorithmId;
     bool anchor = false;
@@ -131,6 +136,7 @@ struct EngineConfig {
     bool bandPinFamilies = false;
     unsigned int seed = 0;
     bool verbose = true;
+    UiLanguage language = UiLanguage::English;
     const volatile std::sig_atomic_t* stopFlag = nullptr;
     std::vector<std::string> allowedAlgorithmIds;
     std::string switchMode = "timer";

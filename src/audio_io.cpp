@@ -7,6 +7,10 @@
 
 namespace {
 
+const char* selectText(UiLanguage language, const char* english, const char* russian) {
+    return language == UiLanguage::Russian ? russian : english;
+}
+
 void writeLE16(std::ostream& stream, std::uint16_t value) {
     const char bytes[2] = {
         static_cast<char>(value & 0xFFU),
@@ -27,19 +31,22 @@ void writeLE32(std::ostream& stream, std::uint32_t value) {
 
 }  // namespace
 
-WavFileSink::WavFileSink(const std::string& outputPath, int sampleRate)
+WavFileSink::WavFileSink(const std::string& outputPath, int sampleRate, UiLanguage language)
     : outputPath_(outputPath),
       sampleRate_(sampleRate),
+      language_(language),
       sampleCount_(0) {
     stream_.open(outputPath_, std::ios::binary | std::ios::trunc);
     if (!stream_.is_open()) {
-        error_ = "Не удалось открыть WAV файл для записи";
+        error_ = selectText(language_,
+                            "Failed to open WAV file for writing",
+                            "Не удалось открыть WAV файл для записи");
         return;
     }
 
     if (!writeHeader(0U)) {
         if (error_.empty()) {
-            error_ = "Не удалось записать WAV заголовок";
+            error_ = selectText(language_, "Failed to write WAV header", "Не удалось записать WAV заголовок");
         }
     }
 }
@@ -65,7 +72,7 @@ bool WavFileSink::writeSample(std::int16_t sample) {
 
     writeLE16(stream_, static_cast<std::uint16_t>(sample));
     if (!stream_.good()) {
-        error_ = "Ошибка записи WAV данных";
+        error_ = selectText(language_, "Failed to write WAV data", "Ошибка записи WAV данных");
         return false;
     }
 
@@ -85,7 +92,7 @@ bool WavFileSink::finalize() {
 
     const std::uint64_t dataSize64 = static_cast<std::uint64_t>(sampleCount_) * 2ULL;
     if (dataSize64 > 0xFFFFFFFFULL) {
-        error_ = "WAV файл превышает лимит 4 GB";
+        error_ = selectText(language_, "WAV file exceeds 4 GB limit", "WAV файл превышает лимит 4 GB");
         stream_.close();
         return false;
     }
@@ -95,7 +102,7 @@ bool WavFileSink::finalize() {
     stream_.seekp(0, std::ios::beg);
     if (!writeHeader(dataSize)) {
         if (error_.empty()) {
-            error_ = "Не удалось обновить WAV заголовок";
+            error_ = selectText(language_, "Failed to update WAV header", "Не удалось обновить WAV заголовок");
         }
         stream_.close();
         return false;
@@ -107,7 +114,7 @@ bool WavFileSink::finalize() {
 
 bool WavFileSink::writeHeader(std::uint32_t dataSize) {
     if (!stream_.good()) {
-        error_ = "Поток WAV недоступен";
+        error_ = selectText(language_, "WAV stream is unavailable", "Поток WAV недоступен");
         return false;
     }
 
@@ -132,7 +139,7 @@ bool WavFileSink::writeHeader(std::uint32_t dataSize) {
     writeLE32(stream_, dataSize);
 
     if (!stream_.good()) {
-        error_ = "Ошибка записи WAV заголовка";
+        error_ = selectText(language_, "Failed to write WAV header", "Ошибка записи WAV заголовка");
         return false;
     }
 
@@ -150,9 +157,11 @@ bool RawStdoutSink::finalize() {
 }
 
 BufferedRawStdoutSink::BufferedRawStdoutSink(std::size_t maxSamples,
-                                             const volatile std::sig_atomic_t* stopFlag)
+                                             const volatile std::sig_atomic_t* stopFlag,
+                                             UiLanguage language)
     : maxSamples_(std::max<std::size_t>(1, maxSamples)),
       stopFlag_(stopFlag),
+      language_(language),
       finishing_(false),
       finalized_(false),
       writeError_(false) {
@@ -251,7 +260,7 @@ void BufferedRawStdoutSink::workerLoop() {
             writeError_ = true;
             finishing_ = true;
             if (error_.empty()) {
-                error_ = "Ошибка записи в stdout";
+                error_ = selectText(language_, "Failed to write to stdout", "Ошибка записи в stdout");
             }
             canWriteCv_.notify_all();
             canReadCv_.notify_all();
@@ -267,7 +276,7 @@ void BufferedRawStdoutSink::workerLoop() {
         std::lock_guard<std::mutex> lock(mutex_);
         writeError_ = true;
         if (error_.empty()) {
-            error_ = "Ошибка flush stdout";
+            error_ = selectText(language_, "Failed to flush stdout", "Ошибка flush stdout");
         }
     }
 }
