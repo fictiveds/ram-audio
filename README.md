@@ -8,6 +8,7 @@ RAM Audio is a Linux-native command-line synthesizer that converts live process 
 > - Runtime support: **Linux (stable)** and **Windows (experimental)**.
 > - Windows build is supported experimentally via WinAPI process-memory backend.
 > - Runtime requires elevated privileges: on Linux use **root** (`sudo`) to read `/proc/<pid>/mem` and `/proc/<pid>/maps`; on Windows run terminal as **Administrator** for best process-memory access.
+> - CLI/help/log text defaults to **English**. Use `--lang ru` for Russian mode.
 > - `--help` and `--list-algorithms` can run without root.
 
 ## Features
@@ -122,6 +123,12 @@ Show algorithms:
 .\dist\windows\ram_audio.exe --list-algorithms
 ```
 
+Russian UI mode (`UTF-8` console output):
+
+```powershell
+.\dist\windows\ram_audio.exe --lang ru --help
+```
+
 Short WAV render:
 
 ```powershell
@@ -216,6 +223,7 @@ sudo ./build/ram_audio --mode file --output ram_audio_seed42.wav --duration 180 
 ### Core I/O and execution
 
 - `--help`, `-h` - print help and exit.
+- `--lang` (`en` or `ru`, default `en`) - CLI/help/log language.
 - `--quiet`, `-q` - disable progress logs.
 - `--mode`, `-m` (`file` or `stream`, default `file`) - select output mode.
 - `--output`, `-o` (default `real_ram_symphony.wav`) - WAV file path for `file` mode.
